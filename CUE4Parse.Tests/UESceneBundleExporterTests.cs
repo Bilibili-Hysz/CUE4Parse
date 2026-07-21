@@ -753,6 +753,46 @@ public class UESceneBundleExporterTests
         Assert.Empty(Directory.GetDirectories(temp.Directory.FullName, ".uescene-stage-*", SearchOption.TopDirectoryOnly));
     }
 
+    [Theory]
+    [InlineData("invalid", SceneExportErrorCode.InvalidData)]
+    [InlineData("denied", SceneExportErrorCode.AccessDenied)]
+    [InlineData("disk-full", SceneExportErrorCode.DiskFull)]
+    public void TryWriteToDirClassifiesProducerFailures(string failure, SceneExportErrorCode expectedCode)
+    {
+        using var temp = new TestDirectory();
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair"))));
+        Exception expected = failure switch
+        {
+            "invalid" => new InvalidDataException("invalid details"),
+            "denied" => new UnauthorizedAccessException("denied details"),
+            _ => new IOException("disk full details", unchecked((int) 0x80070070))
+        };
+        var exporter = new UESceneBundleExporter(plan, (_, _) => throw expected);
+
+        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(expectedCode, result.Failure?.Code);
+        Assert.Same(expected, result.Failure?.Exception);
+    }
+
+    [Fact]
+    public void FormatUESceneExportErrorsUsesCodesInsteadOfExceptionMessages()
+    {
+        var result = new SceneExportResult(false, null, "secret primary details",
+            Failure: new SceneExportError(SceneExportErrorCode.AccessDenied, "secret primary details", new UnauthorizedAccessException("secret primary details")),
+            StructuredRecoveryErrors:
+            [
+                new SceneExportError(SceneExportErrorCode.RollbackFailed, "secret rollback details", new IOException("secret rollback details"))
+            ]);
+
+        var message = CUE4ParseViewModel.FormatUESceneExportErrors(result);
+
+        Assert.Contains("Access to the export destination was denied", message);
+        Assert.Contains("previous files could not be fully restored", message);
+        Assert.DoesNotContain("secret", message);
+    }
+
     [Fact]
     public void TryWriteToDirPromotionFailureRestoresExistingResource()
     {
@@ -785,6 +825,8 @@ public class UESceneBundleExporterTests
         var result = exporter.TryWriteToDir(temp.Directory, cancellation.Token);
 
         Assert.False(result.Success);
+        Assert.Equal(SceneExportErrorCode.Cancelled, result.Failure?.Code);
+        Assert.IsType<OperationCanceledException>(result.Failure?.Exception);
         Assert.Equal(new byte[] { 9, 8, 7 }, File.ReadAllBytes(scene));
         Assert.Empty(Directory.GetDirectories(temp.Directory.FullName, ".uescene-stage-*", SearchOption.TopDirectoryOnly));
     }
@@ -805,6 +847,7 @@ public class UESceneBundleExporterTests
         var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
 
         Assert.False(result.Success);
+        Assert.Equal(SceneExportErrorCode.PromotionFailed, result.Failure?.Code);
         Assert.Equal(new byte[] { 9, 8, 7 }, File.ReadAllBytes(scene));
         Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(oldResource));
         Assert.False(File.Exists(newResource));
@@ -830,6 +873,11 @@ public class UESceneBundleExporterTests
         var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
 
         Assert.False(result.Success);
+        Assert.Equal(SceneExportErrorCode.PromotionFailed, result.Failure?.Code);
+        var rollbackFailure = Assert.Single(result.RecoveryErrors
+            .Where(error => error.Code == SceneExportErrorCode.RollbackFailed)
+            .Take(1));
+        Assert.IsType<IOException>(rollbackFailure.Exception);
         Assert.Contains("rollback failed", result.Error!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("restore blocked", result.Error!);
         Assert.Equal(new byte[] { 1 }, File.ReadAllBytes(existing));
@@ -852,6 +900,8 @@ public class UESceneBundleExporterTests
         var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
 
         Assert.False(result.Success);
+        var cleanupFailure = Assert.Single(result.RecoveryErrors, error => error.Code == SceneExportErrorCode.CleanupFailed);
+        Assert.IsType<IOException>(cleanupFailure.Exception);
         Assert.Contains("cleanup failed", result.Error!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("cleanup blocked", result.Error!);
         Assert.NotNull(result.RecoveryStagePath);
@@ -871,6 +921,8 @@ public class UESceneBundleExporterTests
         var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
 
         Assert.True(result.Success);
+        Assert.Null(result.Failure);
+        Assert.Contains(result.RecoveryErrors, error => error.Code == SceneExportErrorCode.CleanupFailed);
         Assert.NotNull(result.ScenePath);
         Assert.True(File.Exists(result.ScenePath));
         Assert.NotNull(result.RecoveryStagePath);

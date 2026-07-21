@@ -50,7 +50,8 @@ public sealed class UESceneBundleExporter
         }
         catch (Exception ex)
         {
-            return new(false, null, ex.Message);
+            var failure = ClassifyFailure(ex, false);
+            return new(false, null, failure.Message, Failure: failure, StructuredRecoveryErrors: []);
         }
     }
 
@@ -67,6 +68,7 @@ public sealed class UESceneBundleExporter
         var promoted = new List<(string finalPath, string? backupPath)>();
         SceneExportResult result;
         var retainStageForRecovery = false;
+        var promotionStarted = false;
         try
         {
             ValidateDestinationLogicalRoot(destination);
@@ -152,6 +154,7 @@ public sealed class UESceneBundleExporter
                 }
             }
             var promotionIndex = 0;
+            promotionStarted = true;
             foreach (var item in staged)
             {
                 BeforeFinalResourcePromotion?.Invoke(promotionIndex);
@@ -199,7 +202,7 @@ public sealed class UESceneBundleExporter
         }
         catch (Exception ex)
         {
-            var recoveryFailures = new List<string>();
+            var recoveryFailures = new List<SceneExportError>();
             foreach (var (finalPath, backupPath) in promoted.AsEnumerable().Reverse())
             {
                 try
@@ -211,12 +214,15 @@ public sealed class UESceneBundleExporter
                 }
                 catch (Exception rollbackEx)
                 {
-                    recoveryFailures.Add($"Rollback failed for '{finalPath}': {rollbackEx.Message}");
+                    recoveryFailures.Add(new(SceneExportErrorCode.RollbackFailed,
+                        $"Rollback failed for '{finalPath}': {rollbackEx.Message}", rollbackEx, finalPath));
                 }
             }
             retainStageForRecovery = recoveryFailures.Count > 0;
-            var error = recoveryFailures.Count == 0 ? ex.Message : $"{ex.Message} {string.Join(" ", recoveryFailures)}";
-            result = new(false, null, error, retainStageForRecovery ? stage?.FullName : null);
+            var failure = ClassifyFailure(ex, promotionStarted);
+            var error = string.Join(" ", new[] { failure.Message }.Concat(recoveryFailures.Select(item => item.Message)));
+            result = new(false, null, error, retainStageForRecovery ? stage?.FullName : null,
+                Failure: failure, StructuredRecoveryErrors: recoveryFailures);
         }
 
         if (stage?.Exists == true && !retainStageForRecovery)
@@ -229,11 +235,14 @@ public sealed class UESceneBundleExporter
             }
             catch (Exception cleanupEx)
             {
-                var cleanupMessage = $"Staging cleanup failed: {cleanupEx.Message}. Recovery staging retained at '{stage.FullName}'.";
+                var cleanupError = new SceneExportError(SceneExportErrorCode.CleanupFailed,
+                    $"Staging cleanup failed: {cleanupEx.Message}. Recovery staging retained at '{stage.FullName}'.",
+                    cleanupEx, stage.FullName);
                 result = result with
                 {
-                    Error = result.Error is null ? cleanupMessage : $"{result.Error} {cleanupMessage}",
-                    RecoveryStagePath = stage.FullName
+                    Error = result.Error is null ? cleanupError.Message : $"{result.Error} {cleanupError.Message}",
+                    RecoveryStagePath = stage.FullName,
+                    StructuredRecoveryErrors = result.RecoveryErrors.Concat([cleanupError]).ToArray()
                 };
             }
         }
@@ -241,6 +250,27 @@ public sealed class UESceneBundleExporter
             result = result with { RecoveryStagePath = stage.FullName };
 
         return result;
+    }
+
+    private static SceneExportError ClassifyFailure(Exception exception, bool promotionStarted)
+    {
+        var code = exception switch
+        {
+            OperationCanceledException => SceneExportErrorCode.Cancelled,
+            InvalidDataException or ArgumentException or KeyNotFoundException => SceneExportErrorCode.InvalidData,
+            UnauthorizedAccessException => SceneExportErrorCode.AccessDenied,
+            IOException ioException when IsDiskFull(ioException) => SceneExportErrorCode.DiskFull,
+            _ when promotionStarted => SceneExportErrorCode.PromotionFailed,
+            IOException => SceneExportErrorCode.IoFailure,
+            _ => SceneExportErrorCode.Unexpected
+        };
+        return new(code, exception.Message, exception);
+    }
+
+    private static bool IsDiskFull(IOException exception)
+    {
+        var win32Code = exception.HResult & 0xffff;
+        return win32Code is 39 or 112;
     }
 
     private void ValidateSidecars(IEnumerable<UESceneProducedSidecar> sidecars, DirectoryInfo bundleRoot)
@@ -870,6 +900,19 @@ public sealed record UEScenePlanningLight(string Type, byte ColorR, byte ColorG,
     float OuterConeAngleDegrees, float RectWidth, float RectHeight, float SourceRadius, float SoftSourceRadius, float SourceLength,
     float LightSourceAngle, float LightSourceSoftAngle, float BarnDoorAngle, float BarnDoorLength);
 public sealed record UEScenePlanningTransform(float X, float Y, float Z, float Rx, float Ry, float Rz, float Rw, float Sx, float Sy, float Sz);
+public enum SceneExportErrorCode
+{
+    Cancelled,
+    InvalidData,
+    AccessDenied,
+    DiskFull,
+    PromotionFailed,
+    RollbackFailed,
+    CleanupFailed,
+    IoFailure,
+    Unexpected
+}
+public sealed record SceneExportError(SceneExportErrorCode Code, string Message, Exception Exception, string? TargetPath = null);
 public sealed record SceneExportResult(
     bool Success,
     string? ScenePath,
@@ -882,5 +925,10 @@ public sealed record SceneExportResult(
     int MeshCount = 0,
     int InstanceCount = 0,
     int DiagnosticCount = 0,
-    int ResourceCount = 0);
+    int ResourceCount = 0,
+    SceneExportError? Failure = null,
+    IReadOnlyList<SceneExportError>? StructuredRecoveryErrors = null)
+{
+    public IReadOnlyList<SceneExportError> RecoveryErrors => StructuredRecoveryErrors ?? [];
+}
 public static class UESceneDiagnosticCodes { public const ushort StreamingLevels = 1, WorldPartition = 2, MissingMesh = 3, UnsupportedComponent = 4, UnsupportedParent = 5, UnsupportedSocket = 6, InvalidInstanceTransform = 7, MissingMaterialSidecar = 8, UnsupportedLight = 9; }
