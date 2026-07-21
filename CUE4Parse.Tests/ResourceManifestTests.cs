@@ -53,6 +53,17 @@ public class ResourceManifestTests
     }
 
     [Fact]
+    public void AddOrGet_RejectsDifferentIdentityClaimingExistingUriWithIdenticalFacts()
+    {
+        var manifest = new ResourceManifest();
+        manifest.AddOrGet("/Game/T_A.T_A", "Textures/shared.png", "image/png", [1], true);
+
+        Assert.Throws<InvalidDataException>(() => manifest.AddOrGet(
+            "/Game/T_B.T_B", "Textures/shared.png", "image/png", [1], true));
+        Assert.Single(manifest.Resources);
+    }
+
+    [Fact]
     public void AddOrGet_RejectsDifferentIdentityClaimingExistingPhysicalTarget()
     {
         var manifest = new ResourceManifest();
@@ -60,6 +71,17 @@ public class ResourceManifestTests
 
         Assert.Throws<InvalidDataException>(() => manifest.AddOrGet(
             "/Game/T_B.T_B", "Textures/T_B.png", "image/png", [2], true, "staging/shared.png"));
+        Assert.Single(manifest.Resources);
+    }
+
+    [Fact]
+    public void AddOrGet_RejectsDifferentIdentityClaimingExistingPhysicalTargetWithIdenticalFacts()
+    {
+        var manifest = new ResourceManifest();
+        manifest.AddOrGet("/Game/T_A.T_A", "Textures/T_A.png", "image/png", [1], true, "staging/shared.png");
+
+        Assert.Throws<InvalidDataException>(() => manifest.AddOrGet(
+            "/Game/T_B.T_B", "Textures/T_B.png", "image/png", [1], true, "staging/shared.png"));
         Assert.Single(manifest.Resources);
     }
 
@@ -105,6 +127,14 @@ public class ResourceManifestTests
             else
                 manifest.MarkFailed("/Game/Missing.Missing");
         });
+    }
+
+    [Fact]
+    public void GetStatus_RejectsUnknownResourceIdentity()
+    {
+        var manifest = new ResourceManifest();
+
+        Assert.Throws<KeyNotFoundException>(() => manifest.GetStatus("/Game/Missing.Missing"));
     }
 
     [Fact]
