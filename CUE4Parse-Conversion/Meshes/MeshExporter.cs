@@ -15,12 +15,12 @@ using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Writers;
 using CUE4Parse.Utils;
-using Serilog;
 
 namespace CUE4Parse_Conversion.Meshes
 {
     public class MeshExporter : ExporterBase
     {
+
         public List<Mesh> MeshLods = [];
         public readonly List<(uint SourceLodIndex, float SourceScreenSize)> DeclaredLods = [];
         public readonly List<UESceneProducedMaterialSlot> EffectiveMaterialSlots = [];
@@ -41,12 +41,11 @@ namespace CUE4Parse_Conversion.Meshes
 
         public MeshExporter(USkeleton originalSkeleton, ExporterOptions options) : base(originalSkeleton, options)
         {
-            ValidateBundleConfiguration();
             MeshLods = new List<Mesh>();
 
             if (!originalSkeleton.TryConvert(out var bones, out _) || bones.Count == 0)
             {
-                Log.Warning($"Skeleton '{ExportName}' has no bone");
+                Log.Warning("Skeleton '{ExportName}' has no bone", ExportName);
                 return;
             }
 
@@ -89,7 +88,7 @@ namespace CUE4Parse_Conversion.Meshes
 
             if (!originalMesh.TryConvert(splineMeshComponent, out var convertedMesh, options.NaniteMeshFormat, options.LodFormat) || convertedMesh.LODs.Count == 0)
             {
-                Log.Logger.Warning($"Mesh '{ExportName}' has no LODs");
+                Log.Warning("Mesh '{ExportName}' has no LODs", ExportName);
                 return;
             }
 
@@ -152,7 +151,7 @@ namespace CUE4Parse_Conversion.Meshes
                 i++;
                 if (lod.SkipLod)
                 {
-                    Log.Warning($"LOD {i} in mesh '{ExportName}' should be skipped");
+                    Log.Warning("LOD {LodIndex} in mesh '{ExportName}' should be skipped", i, ExportName);
                     continue;
                 }
 
@@ -194,7 +193,7 @@ namespace CUE4Parse_Conversion.Meshes
 
             if (!originalMesh.TryConvert(out var convertedMesh) || convertedMesh.LODs.Count == 0)
             {
-                Log.Warning($"Mesh '{ExportName}' has no LODs");
+                Log.Warning("Mesh '{ExportName}' has no LODs", ExportName);
                 return;
             }
 
@@ -225,36 +224,18 @@ namespace CUE4Parse_Conversion.Meshes
             if (Options.MeshFormat == EMeshFormat.UEFormat)
             {
                 using var ueModelArchive = new FArchiveWriter();
-                var materialSlots = convertedMesh.LODs[0].GetMaterialsWithSlotIndices(options);
-                var materials = materialSlots.Select(slot => slot.Exporter).ToList();
-                var mode = Options.MaterialLinkMode;
-                var logicalModelPath = mode == MaterialLinkMode.Bundle
-                    ? Options.UESceneResourceUriPolicy?.Allocate(originalMesh.GetPathName(), UESceneResourceKind.Model, ".uemodel") ?? MaterialLinkBuilder.BuildModelPath(Options.MaterialExportLayout, TrimLogicalRoot($"{GetExportSavePath()}.uemodel"), originalMesh.GetPathName())
-                    : $"{GetExportSavePath()}.uemodel";
-                var modelPath = mode == MaterialLinkMode.Bundle ? logicalModelPath : $"{GetExportSavePath()}.uemodel";
-                ResourceManifest? manifest = null;
-                if (mode != MaterialLinkMode.None)
-                {
-                    manifest = new ResourceManifest();
-                    foreach (var (_, exporter) in materialSlots)
-                    {
-                        exporter.PopulateManifest(manifest, mode, logicalModelPath, Options.MaterialLinkBundleRoot, Options.MaterialExportLayout);
-                    }
-                    manifest.Seal();
-                }
-
-                new UEModel(originalMesh.Name, convertedMesh, Options.ExportMorphTargets ? originalMesh.MorphTargets : null, totalSockets.ToArray(), originalMesh.Skeleton, originalMesh.PhysicsAsset, Options, mode, BuildMaterialLinks(materialSlots, logicalModelPath, manifest)).Save(ueModelArchive);
-                MeshLods.Add(new Mesh(mode == MaterialLinkMode.Bundle ? logicalModelPath : modelPath, ueModelArchive.GetBuffer(), materials) { ExportManifest = manifest });
+                new UEModel(originalMesh.Name, convertedMesh, Options.ExportMorphTargets ? originalMesh.MorphTargets : null, totalSockets.ToArray(), originalMesh.Skeleton, originalMesh.PhysicsAsset, Options).Save(ueModelArchive);
+                MeshLods.Add(new Mesh($"{GetExportSavePath()}.uemodel", ueModelArchive.GetBuffer(), convertedMesh.LODs[0].GetMaterials(options)));
                 return;
             }
 
-            var lodIndex = 0;
-            for (var index = 0; index < convertedMesh.LODs.Count; index++)
+            var i = 0;
+            for (var lodIndex = 0; lodIndex < convertedMesh.LODs.Count; lodIndex++)
             {
-                var lod = convertedMesh.LODs[index];
+                var lod = convertedMesh.LODs[lodIndex];
                 if (lod.SkipLod)
                 {
-                    Log.Warning($"LOD {lodIndex} in mesh '{ExportName}' should be skipped");
+                    Log.Warning("LOD {LodIndex} in mesh '{ExportName}' should be skipped", i, ExportName);
                     continue;
                 }
 
