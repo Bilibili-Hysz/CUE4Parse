@@ -224,8 +224,26 @@ namespace CUE4Parse_Conversion.Meshes
             if (Options.MeshFormat == EMeshFormat.UEFormat)
             {
                 using var ueModelArchive = new FArchiveWriter();
-                new UEModel(originalMesh.Name, convertedMesh, Options.ExportMorphTargets ? originalMesh.MorphTargets : null, totalSockets.ToArray(), originalMesh.Skeleton, originalMesh.PhysicsAsset, Options).Save(ueModelArchive);
-                MeshLods.Add(new Mesh($"{GetExportSavePath()}.uemodel", ueModelArchive.GetBuffer(), convertedMesh.LODs[0].GetMaterials(options)));
+                var materialSlots = convertedMesh.LODs[0].GetMaterialsWithSlotIndices(options);
+                var materials = materialSlots.Select(slot => slot.Exporter).ToList();
+                var mode = Options.MaterialLinkMode;
+                var logicalModelPath = mode == MaterialLinkMode.Bundle
+                    ? Options.UESceneResourceUriPolicy?.Allocate(originalMesh.GetPathName(), UESceneResourceKind.Model, ".uemodel") ?? MaterialLinkBuilder.BuildModelPath(Options.MaterialExportLayout, TrimLogicalRoot($"{GetExportSavePath()}.uemodel"), originalMesh.GetPathName())
+                    : $"{GetExportSavePath()}.uemodel";
+                var modelPath = mode == MaterialLinkMode.Bundle ? logicalModelPath : $"{GetExportSavePath()}.uemodel";
+                ResourceManifest? manifest = null;
+                if (mode != MaterialLinkMode.None)
+                {
+                    manifest = new ResourceManifest();
+                    foreach (var (_, exporter) in materialSlots)
+                    {
+                        exporter.PopulateManifest(manifest, mode, logicalModelPath, Options.MaterialLinkBundleRoot, Options.MaterialExportLayout);
+                    }
+                    manifest.Seal();
+                }
+
+                new UEModel(originalMesh.Name, convertedMesh, Options.ExportMorphTargets ? originalMesh.MorphTargets : null, totalSockets.ToArray(), originalMesh.Skeleton, originalMesh.PhysicsAsset, Options, mode, BuildMaterialLinks(materialSlots, logicalModelPath, manifest)).Save(ueModelArchive);
+                MeshLods.Add(new Mesh(mode == MaterialLinkMode.Bundle ? logicalModelPath : modelPath, ueModelArchive.GetBuffer(), materials) { ExportManifest = manifest });
                 return;
             }
 
