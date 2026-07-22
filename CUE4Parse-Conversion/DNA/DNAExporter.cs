@@ -33,8 +33,16 @@ public class DNAExporter : ExporterBase
             return false;
         }
 
-        File.WriteAllBytesAsync(savedFilePath, _dnaAsset.DNAData.Value);
-        return File.Exists(savedFilePath);
+        try
+        {
+            File.WriteAllBytes(savedFilePath, _dnaAsset.DNAData.Value);
+            return File.Exists(savedFilePath);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            label = $"Failed to export DNA: {e.Message}";
+            return false;
+        }
     }
 
     public override bool TryWriteToZip(out byte[] zipFile)

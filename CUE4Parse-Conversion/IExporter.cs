@@ -5,7 +5,9 @@ using CUE4Parse_Conversion.Materials;
 using CUE4Parse_Conversion.Meshes;
 using CUE4Parse_Conversion.PoseAsset;
 using CUE4Parse_Conversion.Textures;
+using CUE4Parse_Conversion.UEFormat.MaterialLinks;
 using CUE4Parse_Conversion.UEFormat.Enums;
+using CUE4Parse_Conversion.UEScene;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Actor;
 using CUE4Parse.UE4.Assets.Exports.Animation;
@@ -18,6 +20,12 @@ using CUE4Parse.Utils;
 
 namespace CUE4Parse_Conversion
 {
+    public enum MaterialExportLayout
+    {
+        PreserveHierarchy,
+        Categorized
+    }
+
     public struct ExporterOptions
     {
         public ELodFormat LodFormat;
@@ -33,6 +41,11 @@ namespace CUE4Parse_Conversion
         public bool ExportMorphTargets;
         public bool ExportMaterials;
         public bool ExportHdrTexturesAsHdr;
+        public MaterialLinkMode MaterialLinkMode;
+        public string? MaterialLinkBundleRoot;
+        public string? UESceneProjectName;
+        public UESceneResourceUriPolicy? UESceneResourceUriPolicy;
+        public MaterialExportLayout MaterialExportLayout;
 
         public ExporterOptions()
         {
@@ -48,6 +61,11 @@ namespace CUE4Parse_Conversion
             ExportMorphTargets = true;
             ExportMaterials = true;
             ExportHdrTexturesAsHdr = true;
+            MaterialLinkMode = MaterialLinkMode.None;
+            MaterialLinkBundleRoot = null;
+            UESceneProjectName = null;
+            UESceneResourceUriPolicy = null;
+            MaterialExportLayout = MaterialExportLayout.PreserveHierarchy;
         }
     }
 
@@ -101,7 +119,12 @@ namespace CUE4Parse_Conversion
         protected string FixAndCreatePath(DirectoryInfo baseDirectory, string fullPath, string? ext = null)
         {
             if (fullPath.StartsWith('/')) fullPath = fullPath[1..];
-            var ret = Path.Combine(baseDirectory.FullName, fullPath) + (ext != null ? $".{ext.ToLower()}" : "");
+            var combined = Path.Combine(baseDirectory.FullName, fullPath) + (ext != null ? $".{ext.ToLower()}" : "");
+            var ret = Path.GetFullPath(combined);
+            // Path containment: ensure the result stays within the base directory
+            if (!ret.StartsWith(baseDirectory.FullName.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && !ret.Equals(baseDirectory.FullName, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Path escape detected: '{combined}' resolves outside base directory '{baseDirectory.FullName}'.");
             Directory.CreateDirectory(ret.Replace('\\', '/').SubstringBeforeLast('/'));
             return ret;
         }
@@ -114,6 +137,9 @@ namespace CUE4Parse_Conversion
         public Exporter(UObject export) : this(export, new ExporterOptions()) { }
         public Exporter(UObject export, ExporterOptions options)
         {
+            if (UsesBundleOutputRoot(export, options))
+                MaterialLinkBuilder.ValidateBundleRoot(options.MaterialLinkBundleRoot);
+
             _exporterBase = export switch
             {
                 UAnimSequence animSequence => new AnimExporter(animSequence, options),
@@ -127,6 +153,18 @@ namespace CUE4Parse_Conversion
                 _ => throw new NotSupportedException($"export of '{export.GetType()}' is not supported yet.")
             };
         }
+
+        public static bool UsesBundleOutputRoot(UObject export, ExporterOptions options) => UsesBundleOutputRoot(export.GetType(), options);
+
+        public static bool UsesBundleOutputRoot(Type exportType, ExporterOptions options) =>
+            options.MaterialLinkMode == MaterialLinkMode.Bundle &&
+            options.MeshFormat == EMeshFormat.UEFormat &&
+            (typeof(USkeletalMesh).IsAssignableFrom(exportType) ||
+             typeof(USkeleton).IsAssignableFrom(exportType) ||
+             typeof(UStaticMesh).IsAssignableFrom(exportType));
+
+        public static DirectoryInfo GetOutputDirectory(UObject export, ExporterOptions options, string modelDirectory) =>
+            new(UsesBundleOutputRoot(export, options) ? options.MaterialLinkBundleRoot! : modelDirectory);
 
         public bool TryWriteToDir(DirectoryInfo baseDirectory, out string label, out string savedFilePath) =>
             _exporterBase.TryWriteToDir(baseDirectory, out label, out savedFilePath);

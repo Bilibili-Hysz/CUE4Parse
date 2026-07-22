@@ -1,6 +1,8 @@
-﻿using CUE4Parse_Conversion.Meshes.PSK;
+using CUE4Parse_Conversion.Meshes.PSK;
+using CUE4Parse_Conversion.Animations.UEFormat;
 using CUE4Parse_Conversion.Meshes.UEFormat.Collision;
 using CUE4Parse_Conversion.UEFormat;
+using CUE4Parse_Conversion.UEFormat.MaterialLinks;
 using CUE4Parse_Conversion.UEFormat.Structs;
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
@@ -16,7 +18,7 @@ public class UEModel : UEFormatExport
 {
     protected override string Identifier { get; set; } = "UEMODEL";
 
-    public UEModel(string name, CStaticMesh mesh, FPackageIndex bodySetupLazy, ExporterOptions options) : base(name, options)
+    public UEModel(string name, CStaticMesh mesh, FPackageIndex bodySetupLazy, ExporterOptions options, MaterialLinkMode materialLinkMode = MaterialLinkMode.None, FModelMaterialLinks? materialLinks = null) : base(name, options)
     {
         using (var lodChunk = new FDataChunk("LODS"))
         {
@@ -26,7 +28,7 @@ public class UEModel : UEFormatExport
                 if (lod.SkipLod) continue;
 
                 using var subLodChunk = new FStaticDataChunk($"LOD{lodIdx}");
-                SerializeStaticMeshData(subLodChunk, lod.Verts, lod.Indices.Value, lod.VertexColors, lod.ExtraVertexColors, lod.Sections.Value, lod.ExtraUV.Value);
+                SerializeStaticMeshData(subLodChunk, lod.Verts, lod.Indices.Value, lod.VertexColors, lod.ExtraVertexColors, lod.Sections.Value, lod.ExtraUV.Value, materialLinks);
                 subLodChunk.Serialize(lodChunk);
 
                 lodChunk.Count++;
@@ -47,11 +49,14 @@ public class UEModel : UEFormatExport
             }
             collisionChunk.Serialize(Ar);
         }
-
+        FModelMaterialLinkWriter.Write(Ar, materialLinkMode, materialLinks);
     }
 
-    public UEModel(string name, CSkeletalMesh mesh, FPackageIndex[]? morphTargets, FPackageIndex[] sockets, FPackageIndex skeletonLazy, FPackageIndex physicsAssetLazy, ExporterOptions options) : base(name, options)
+    public UEModel(string name, CSkeletalMesh mesh, FPackageIndex[]? morphTargets, FPackageIndex[] sockets, FPackageIndex skeletonLazy, FPackageIndex physicsAssetLazy, ExporterOptions options, MaterialLinkMode materialLinkMode = MaterialLinkMode.None, FModelMaterialLinks? materialLinks = null) : base(name, options)
     {
+        if (!skeletonLazy.TryLoad<USkeleton>(out var skeleton))
+            throw new ArgumentException($"Skeletal mesh '{name}' has no resolvable skeleton.", nameof(skeletonLazy));
+
         using (var lodChunk = new FDataChunk("LODS"))
         {
             for (var lodIdx = 0; lodIdx < mesh.LODs.Count; lodIdx++)
@@ -60,7 +65,7 @@ public class UEModel : UEFormatExport
                 if (lod.SkipLod) continue;
 
                 using var subLodChunk = new FStaticDataChunk($"LOD{lodIdx}");
-                SerializeStaticMeshData(subLodChunk, lod.Verts, lod.Indices.Value, lod.VertexColors, lod.ExtraVertexColors, lod.Sections.Value, lod.ExtraUV.Value);
+                SerializeStaticMeshData(subLodChunk, lod.Verts, lod.Indices.Value, lod.VertexColors, lod.ExtraVertexColors, lod.Sections.Value, lod.ExtraUV.Value, materialLinks);
                 SerializeSkeletalMeshData(subLodChunk, lod.Verts, morphTargets, lod.LODIndex);
                 subLodChunk.Serialize(lodChunk);
 
@@ -74,7 +79,7 @@ public class UEModel : UEFormatExport
 
         using (var skeletonChunk = new FDataChunk("SKELETON", 1))
         {
-            SerializeSkeletonData(skeletonChunk, skeletonLazy.Load<USkeleton>(), mesh.RefSkeleton, sockets, []);
+            SerializeSkeletonData(skeletonChunk, skeleton, mesh.RefSkeleton, sockets, []);
 
             skeletonChunk.Serialize(Ar);
         }
@@ -87,9 +92,11 @@ public class UEModel : UEFormatExport
 
             physicsChunk.Serialize(Ar);
         }*/
+        FModelMaterialLinkWriter.Write(Ar, materialLinkMode, materialLinks);
+        FModelSkeletonExtensionWriter.WriteModelIdentity(Ar, FModelSkeletonIdentity.FromSkeleton(skeleton));
     }
 
-    public UEModel(string name, USkeleton skeleton, List<CSkelMeshBone> bones, FPackageIndex[] sockets, FVirtualBone[] virtualBones, ExporterOptions options) : base(name, options)
+    public UEModel(string name, USkeleton skeleton, List<CSkelMeshBone> bones, FPackageIndex[] sockets, FVirtualBone[] virtualBones, ExporterOptions options, MaterialLinkMode materialLinkMode = MaterialLinkMode.None, FModelMaterialLinks? materialLinks = null) : base(name, options)
     {
         using (var skeletonChunk = new FDataChunk("SKELETON", 1))
         {
@@ -97,9 +104,11 @@ public class UEModel : UEFormatExport
 
             skeletonChunk.Serialize(Ar);
         }
+        FModelMaterialLinkWriter.Write(Ar, materialLinkMode, materialLinks);
+        FModelSkeletonExtensionWriter.WriteModelIdentity(Ar, FModelSkeletonIdentity.FromSkeleton(skeleton));
     }
 
-    private void SerializeStaticMeshData(FArchiveWriter archive, IReadOnlyCollection<CMeshVertex> verts, uint[] indices, FColor[]? vertexColors, CVertexColor[]? extraVertexColors, CMeshSection[] sections, FMeshUVFloat[][] extraUVs)
+    private void SerializeStaticMeshData(FArchiveWriter archive, IReadOnlyCollection<CMeshVertex> verts, uint[] indices, FColor[]? vertexColors, CVertexColor[]? extraVertexColors, CMeshSection[] sections, FMeshUVFloat[][] extraUVs, FModelMaterialLinks? materialLinks = null)
     {
         using var vertexChunk = new FDataChunk("VERTICES", verts.Count);
         using var normalsChunk = new FDataChunk("NORMALS", verts.Count);
@@ -186,12 +195,13 @@ public class UEModel : UEFormatExport
 
         using (var materialChunk = new FDataChunk("MATERIALS", sections.Length))
         {
-            foreach (var section in sections)
+            for (var sectionIndex = 0; sectionIndex < sections.Length; sectionIndex++)
             {
-                var materialName = section.Material?.Name.Text ?? section.MaterialName ?? string.Empty;
+                var section = sections[sectionIndex];
+                var materialLink = materialLinks?.Slots.FirstOrDefault(slot => slot.SlotIndex == sectionIndex);
+                var materialPath = materialLink?.UnrealMaterialPath ?? section.Material?.GetPathName() ?? string.Empty;
+                var materialName = MaterialDisplayName(materialPath) ?? section.Material?.Name.Text ?? section.MaterialName ?? string.Empty;
                 materialChunk.WriteFString(materialName);
-
-                var materialPath = section.Material?.GetPathName() ?? string.Empty;
                 materialChunk.WriteFString(materialPath);
 
                 materialChunk.Write(section.FirstIndex);
@@ -200,6 +210,13 @@ public class UEModel : UEFormatExport
 
             materialChunk.Serialize(archive);
         }
+    }
+
+    private static string? MaterialDisplayName(string materialPath)
+    {
+        if (string.IsNullOrEmpty(materialPath)) return null;
+        var separator = materialPath.LastIndexOf('/');
+        return separator >= 0 ? materialPath[(separator + 1)..] : materialPath;
     }
 
     private void SerializeSkeletalMeshData(FArchiveWriter archive, CSkelMeshVertex[] verts, FPackageIndex[]? morphTargets, int lodIndex)

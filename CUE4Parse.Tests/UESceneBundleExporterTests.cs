@@ -659,7 +659,7 @@ public class UESceneBundleExporterTests
     }
 
     [Fact]
-    public void TryWriteToDirRejectsMismatchedLodMetadataBeforeStaging()
+    public void TryWriteToDirPreservesSparseSourceLodMetadata()
     {
         using var temp = new TestDirectory();
         var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair"))));
@@ -667,9 +667,9 @@ public class UESceneBundleExporterTests
 
         var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
 
-        Assert.False(result.Success);
-        Assert.Contains("LOD metadata", result.Error!, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(Directory.GetDirectories(temp.Directory.FullName, ".uescene-stage-*", SearchOption.TopDirectoryOnly));
+        Assert.True(result.Success, result.Error);
+        var parsed = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
+        Assert.Equal(1u, Assert.Single(parsed.Lods!).LodIndex);
     }
 
     [Fact]

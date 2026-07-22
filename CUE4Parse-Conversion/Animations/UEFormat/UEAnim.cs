@@ -12,7 +12,7 @@ public class UEAnim : UEFormatExport
 {
     protected override string Identifier { get; set; } = "UEANIM";
 
-    public UEAnim(string name, CAnimSet animSet, int sequenceIndex, ExporterOptions options) : base(name, options)
+    public UEAnim(string name, CAnimSet animSet, int sequenceIndex, string sourceAnimationPath, FModelSkeletonIdentity targetSkeleton, ExporterOptions options) : base(name, options)
     {
         var sequence = animSet.Sequences[sequenceIndex];
         var originalSequence = sequence.OriginalSequence;
@@ -142,6 +142,11 @@ public class UEAnim : UEFormatExport
 
             curveChunk.Serialize(Ar);
         }
+
+        FModelSkeletonExtensionWriter.WriteTargetSkeleton(
+            Ar,
+            sourceAnimationPath,
+            targetSkeleton);
 
     }
 }

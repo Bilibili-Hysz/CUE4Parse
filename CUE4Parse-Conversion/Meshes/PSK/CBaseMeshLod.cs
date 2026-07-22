@@ -49,16 +49,38 @@ public class CBaseMeshLod : IDisposable
         ExtraVertexColors = Array.Empty<CVertexColor>();
     }
 
-    public List<MaterialExporter2> GetMaterials(ExporterOptions options)
+    public List<MaterialExporter2> GetMaterials(ExporterOptions options) => GetMaterialsWithSlotIndices(options).Select(material => material.Exporter).ToList();
+
+    /// <summary>Maps Unreal material-array indices to every exported section ordinal that consumes them.</summary>
+    public IReadOnlyList<(int SourceMaterialIndex, int SectionIndex)> GetSectionMaterialIndices()
+    {
+        if (SkipLod) return [];
+        var mappings = new List<(int SourceMaterialIndex, int SectionIndex)>();
+        for (var sectionIndex = 0; sectionIndex < Sections.Value.Length; sectionIndex++)
+        {
+            var sourceMaterialIndex = Sections.Value[sectionIndex].MaterialIndex;
+            if (sourceMaterialIndex >= 0)
+                mappings.Add((sourceMaterialIndex, sectionIndex));
+        }
+        return mappings;
+    }
+
+    public List<(int SlotIndex, MaterialExporter2 Exporter)> GetMaterialsWithSlotIndices(ExporterOptions options,
+        IReadOnlyList<UMaterialInterface?>? overrideMaterials = null)
     {
         if (SkipLod || !options.ExportMaterials) return [];
 
-        var materials = new List<MaterialExporter2>();
-        foreach (var section in Sections.Value)
+        var materials = new List<(int SlotIndex, MaterialExporter2 Exporter)>();
+        for (var slotIndex = 0; slotIndex < Sections.Value.Length; slotIndex++)
         {
-            if (section.Material?.Load<UMaterialInterface>() is { } material)
+            var section = Sections.Value[slotIndex];
+            var material = section.MaterialIndex >= 0 && overrideMaterials is not null && section.MaterialIndex < overrideMaterials.Count
+                ? overrideMaterials[section.MaterialIndex]
+                : null;
+            material ??= section.Material?.Load<UMaterialInterface>();
+            if (material is not null)
             {
-                materials.Add(new MaterialExporter2(material, options));
+                materials.Add((slotIndex, new MaterialExporter2(material, options)));
             }
         }
         return materials;

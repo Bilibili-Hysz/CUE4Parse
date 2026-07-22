@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
@@ -24,6 +25,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CUE4Parse\CUE4Parse.csproj" />
+    <ProjectReference Include="..\CUE4Parse-Conversion\CUE4Parse-Conversion.csproj" />
+    <ProjectReference Include="..\..\FModel\FModel.csproj" />
   </ItemGroup>
 
 </Project>

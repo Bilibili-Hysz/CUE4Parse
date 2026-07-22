@@ -90,11 +90,12 @@ public sealed class UESceneBundleExporter
                 var bytes = produced.Bytes;
                 if (bytes is null || bytes.Length == 0) throw new InvalidDataException($"Required resource '{resource.LogicalUri}' has no bytes.");
                 if (produced.Lods.Count == 0) throw new InvalidDataException($"Required resource '{resource.LogicalUri}' has no declared LODs.");
-                if (!produced.Lods.Select(lod => lod.SourceLodIndex).SequenceEqual(Enumerable.Range(0, produced.Lods.Count).Select(index => checked((uint) index))))
-                    throw new InvalidDataException($"Required resource '{resource.LogicalUri}' has mismatched declared LOD metadata.");
+                if (produced.Lods.Select(lod => lod.SourceLodIndex).Distinct().Count() != produced.Lods.Count)
+                    throw new InvalidDataException($"Required resource '{resource.LogicalUri}' declares duplicate source LOD indices.");
             }
 
             ValidateSidecars(producedResources.Values.SelectMany(resource => resource.Sidecars), bundleRoot);
+            ValidateMaterialOverrideLinks(_plan.Document, producedResources);
             ValidateFinalResources(producedResources.Values.Select(resource =>
                     new UESceneFinalResource((byte) BundleResourceKind.Model, 0, resource.LogicalUri, "", resource.Bytes))
                 .Concat(producedResources.Values.SelectMany(resource => resource.Sidecars)
@@ -290,6 +291,38 @@ public sealed class UESceneBundleExporter
                                               sidecar.Mime != first.Mime || !sidecar.Bytes.SequenceEqual(first.Bytes)))
                 throw new InvalidDataException($"Conflicting sidecar declarations for logical URI '{group.Key}'.");
             _ = ResolvePath(bundleRoot, first.LogicalUri);
+        }
+    }
+
+    private static void ValidateMaterialOverrideLinks(UESceneDocument document,
+        IReadOnlyDictionary<string, UESceneProducedResource> producedResources)
+    {
+        var assets = document.Assets ?? [];
+        var components = document.Components ?? [];
+        var overrides = document.MaterialOverrides ?? [];
+        var entries = document.BundleEntries ?? [];
+        var assetsById = assets.ToDictionary(asset => asset.AssetId);
+        foreach (var component in components)
+        {
+            var modelEntry = entries.SingleOrDefault(entry => entry.ResourceKind == (byte)BundleResourceKind.Model &&
+                entry.OwnerAssetId == component.MeshAssetId);
+            if (modelEntry is null || !producedResources.TryGetValue(modelEntry.LogicalUri, out var produced))
+                continue;
+            // Legacy/custom producers may expose opaque model bytes. The FModel
+            // producer supplies this manifest and is therefore verified strictly.
+            if (produced.MaterialSlotMappings is null)
+                continue;
+            foreach (var materialOverride in overrides.Skip(checked((int)component.MaterialOverrideStart))
+                         .Take(checked((int)component.MaterialOverrideCount)))
+            {
+                if (materialOverride.OverrideMaterialAssetId == 0) continue;
+                var expected = assetsById[materialOverride.OverrideMaterialAssetId].CanonicalUnrealPath;
+                var mapped = produced.MaterialSlots.Where(slot => slot.SourceMaterialIndex == materialOverride.SlotOrdinal).ToArray();
+                if (mapped.Length == 0)
+                    throw new InvalidDataException($"Component {component.ComponentId} material override source slot {materialOverride.SlotOrdinal} is absent from produced model '{modelEntry.LogicalUri}'.");
+                if (mapped.Any(slot => !StringComparer.Ordinal.Equals(slot.EffectiveMaterialPath, expected)))
+                    throw new InvalidDataException($"Component {component.ComponentId} material override source slot {materialOverride.SlotOrdinal} disagrees with produced model '{modelEntry.LogicalUri}'.");
+            }
         }
     }
 
@@ -569,7 +602,10 @@ public sealed class UESceneBundleExporter
         {
             foreach (var sourceInput in inputActor.Components)
             {
-                var input = sourceInput;
+                var input = sourceInput with
+                {
+                    OverrideMaterialPaths = NormalizeOverrideMaterialPaths(sourceInput.OverrideMaterialPaths)
+                };
                 if (input.Light is not null) continue;
                 if (!TryKind(input.Kind, out var kind))
                 {
@@ -858,6 +894,12 @@ public sealed class UESceneBundleExporter
     private static TransformRecord ToTransform(ulong id, UEScenePlanningTransform t) => new(id, t.X, t.Y, t.Z, t.Rx, t.Ry, t.Rz, t.Rw, t.Sx, t.Sy, t.Sz, 0);
     private static InstanceTransform ToInstanceTransform(UEScenePlanningTransform t) => new(t.X, t.Y, t.Z, t.Rx, t.Ry, t.Rz, t.Rw, t.Sx, t.Sy, t.Sz);
     private static UEScenePlanningTransform ToPlanningTransform(FTransform t) => new(t.Translation.X, t.Translation.Y, t.Translation.Z, t.Rotation.X, t.Rotation.Y, t.Rotation.Z, t.Rotation.W, t.Scale3D.X, t.Scale3D.Y, t.Scale3D.Z);
+    private static IReadOnlyList<string?> NormalizeOverrideMaterialPaths(IReadOnlyList<string?> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        return paths.Select(path => string.IsNullOrWhiteSpace(path) ? null : path.Trim()).ToArray();
+    }
+
     private static string LastName(string path) => path.Split(['/','.'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? path;
     private static void RecomputeRanges(List<ActorRecord> actors, List<ComponentRecord> components, List<MaterialOverrideRecord> overrides, List<DiagnosticRecord> diagnostics)
     {
@@ -873,22 +915,28 @@ public sealed record UEScenePlannedResource(string CanonicalUnrealPath, string L
     string? SourceMeshPath = null, IReadOnlyList<string?>? OverrideMaterialPaths = null);
 public sealed record UESceneMeshVariantKey(string SourceMeshPath, IReadOnlyList<string?> OverrideMaterialPaths)
 {
-    public bool HasOverrides => OverrideMaterialPaths.Any(path => !string.IsNullOrWhiteSpace(path));
-    public string Identity { get; } = OverrideMaterialPaths.Any(path => !string.IsNullOrWhiteSpace(path))
+    private static IReadOnlyList<string?> Normalize(IReadOnlyList<string?> paths) => paths
+        .Select(path => string.IsNullOrWhiteSpace(path) ? null : path.Trim()).ToArray();
+    public bool HasOverrides => Normalize(OverrideMaterialPaths).Any(path => path is not null);
+    public string Identity { get; } = Normalize(OverrideMaterialPaths).Any(path => path is not null)
         ? SourceMeshPath + "#uescene-material-variant-" + Convert.ToHexString(
-            SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("\u001f", OverrideMaterialPaths.Select(path => path ?? "\u0000")))).AsSpan(0, 16)).ToLowerInvariant()
+            SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("\u001f", Normalize(OverrideMaterialPaths).Select(path => path ?? "\u0000")))).AsSpan(0, 16)).ToLowerInvariant()
         : SourceMeshPath;
 }
 public sealed record UESceneProducedLod(uint SourceLodIndex, float SourceScreenSize = 0, uint Provenance = 0);
 public sealed record UEScenePublicationDestination(string ScenePhysicalPath, string ResourcePhysicalRoot,
     UESceneResourceLogicalRoot ResourceLogicalRoot,
     UESceneResourcePublicationPolicy ResourcePublicationPolicy = UESceneResourcePublicationPolicy.Overwrite);
-public sealed record UESceneProducedResource(string LogicalUri, byte[] Bytes, IReadOnlyList<UESceneProducedLod> Lods, IReadOnlyList<UESceneProducedSidecar> Sidecars)
+public sealed record UESceneProducedResource(string LogicalUri, byte[] Bytes, IReadOnlyList<UESceneProducedLod> Lods, IReadOnlyList<UESceneProducedSidecar> Sidecars,
+    IReadOnlyList<UESceneProducedMaterialSlot>? MaterialSlotMappings = null)
 {
-    public static UESceneProducedResource FromMeshExport(string logicalUri, byte[] bytes, IEnumerable<UESceneProducedLod> lods, IEnumerable<UESceneProducedSidecar>? sidecars = null) => new(logicalUri, bytes, lods.ToArray(), (sidecars ?? []).ToArray());
+    public IReadOnlyList<UESceneProducedMaterialSlot> MaterialSlots => MaterialSlotMappings ?? [];
+    public static UESceneProducedResource FromMeshExport(string logicalUri, byte[] bytes, IEnumerable<UESceneProducedLod> lods, IEnumerable<UESceneProducedSidecar>? sidecars = null,
+        IEnumerable<UESceneProducedMaterialSlot>? materialSlots = null) => new(logicalUri, bytes, lods.ToArray(), (sidecars ?? []).ToArray(), materialSlots?.ToArray());
     public static UESceneProducedResource FromMeshExporterLods(string meshFileName, byte[] bytes, IEnumerable<(uint SourceLodIndex, float SourceScreenSize)> declaredLods, IEnumerable<UESceneProducedSidecar>? sidecars = null) =>
         new(meshFileName, bytes, declaredLods.Select(lod => new UESceneProducedLod(lod.SourceLodIndex, lod.SourceScreenSize)).ToArray(), (sidecars ?? []).ToArray());
 }
+public sealed record UESceneProducedMaterialSlot(uint SourceMaterialIndex, uint SectionIndex, string EffectiveMaterialPath);
 public sealed record UESceneProducedSidecar(string CanonicalUnrealPath, BundleResourceKind Kind, string LogicalUri, string Mime, byte[] Bytes);
 public sealed record UESceneFinalResource(byte ResourceKind, ulong OwnerAssetId, string LogicalUri, string Mime, byte[] Bytes);
 public sealed record UESceneFinalBundlePlan(UESceneDocument Document, IReadOnlyList<UESceneFinalResource> Resources);

@@ -24,7 +24,8 @@ public class DuplicateClassesTest
         assemblies = assemblies.Append(Assembly.GetExecutingAssembly());
         Type propertyHolderType = typeof(IPropertyHolder);
 
-        foreach (var assembly in assemblies) {
+        foreach (var assembly in assemblies)
+        {
             foreach (var definedType in assembly.DefinedTypes)
             {
                 if (definedType.IsAbstract ||
@@ -42,7 +43,7 @@ public class DuplicateClassesTest
                     classes.Add(name);
                 else
                     duplicates.Add(name);
-            }    
+            }
         }
 
         Assert.Empty(duplicates);
