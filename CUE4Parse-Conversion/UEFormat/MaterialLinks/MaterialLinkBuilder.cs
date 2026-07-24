@@ -55,6 +55,29 @@ public sealed class MaterialLinkSourceParameter
 
 public static class MaterialLinkBuilder
 {
+    public static string NormalizeUnrealMaterialPath(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        path = path.Trim();
+        if (path.StartsWith("Game/", StringComparison.Ordinal) || path.StartsWith("Engine/", StringComparison.Ordinal))
+            path = "/" + path;
+        if (path.Length < 4 || !path.StartsWith("/", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal))
+            return path;
+
+        var slash = path.LastIndexOf('/');
+        if (slash <= 1) return path;
+        var packageSegments = path[1..slash].Split('/');
+        if (packageSegments.Any(segment => string.IsNullOrEmpty(segment) || segment is "." or ".." || segment.Contains('.')))
+            return path;
+
+        var terminal = path[(slash + 1)..];
+        var dot = terminal.IndexOf('.');
+        if (dot > 0 && dot == terminal.LastIndexOf('.') && dot < terminal.Length - 1 &&
+            StringComparer.Ordinal.Equals(terminal[..dot], terminal[(dot + 1)..]))
+            return path[..(slash + 1 + dot)];
+        return path;
+    }
+
     public static FModelMaterialLinks BuildForMaterialSlots(MaterialLinkMode mode, string modelPath, IEnumerable<(int SlotIndex, MaterialExporter2 Exporter)> materials, string? bundleRoot = null)
     {
         var links = new FModelMaterialLinks();
@@ -103,7 +126,7 @@ public static class MaterialLinkBuilder
             }
         }
 
-        var links = new FModelMaterialLinks { Slots = [new FModelMaterialSlot { SlotIndex = slotIndex, SlotName = slotName ?? slotIndex.ToString(), UnrealMaterialPath = unrealMaterialPath, MaterialJsonUri = materialUri, Parameters = parameters }] };
+        var links = new FModelMaterialLinks { Slots = [new FModelMaterialSlot { SlotIndex = slotIndex, SlotName = slotName ?? slotIndex.ToString(), UnrealMaterialPath = NormalizeUnrealMaterialPath(unrealMaterialPath), MaterialJsonUri = materialUri, Parameters = parameters }] };
         AddPbrInterfaces(links.PbrInterfaces, slotIndex, sources, emitted);
         return links;
     }

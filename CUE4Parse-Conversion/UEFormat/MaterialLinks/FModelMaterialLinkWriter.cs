@@ -13,6 +13,7 @@ public enum MaterialLinkMode
 
 public sealed class FModelMaterialLinks
 {
+    public bool WriteSourceMaterialIndices { get; set; }
     public List<FModelMaterialSlot> Slots { get; init; } = [];
     public List<FModelPbrInterface> PbrInterfaces { get; } = [];
 }
@@ -43,6 +44,7 @@ public sealed class FModelPbrInterface
 public sealed class FModelMaterialSlot
 {
     public int SlotIndex { get; init; }
+    public int? SourceMaterialIndex { get; set; }
     public string SlotName { get; init; } = string.Empty;
     public string UnrealMaterialPath { get; init; } = string.Empty;
     public string MaterialJsonUri { get; init; } = string.Empty;
@@ -101,6 +103,7 @@ public sealed class FModelTextureReference
 public static class FModelMaterialLinkWriter
 {
     private const byte ExtensionVersion = 1;
+    private const byte SourceIndexExtensionVersion = 2;
 
     public static void Write(FArchiveWriter archive, MaterialLinkMode mode = MaterialLinkMode.None, FModelMaterialLinks? links = null)
     {
@@ -110,13 +113,15 @@ public static class FModelMaterialLinkWriter
         var textures = mode == MaterialLinkMode.Embedded ? CollectEmbeddedTextures(links) : [];
         Validate(links, mode);
         using var extensionArchive = new FArchiveWriter();
+        var hasSourceMaterialIndices = links.WriteSourceMaterialIndices;
         using (var materialsChunk = new FDataChunk("FMODEL_MATERIALS", links.Slots.Count))
         {
-            materialsChunk.Write(ExtensionVersion);
+            materialsChunk.Write(hasSourceMaterialIndices ? SourceIndexExtensionVersion : ExtensionVersion);
             materialsChunk.Write(links.Slots.Count);
             foreach (var slot in links.Slots)
             {
                 materialsChunk.Write(slot.SlotIndex);
+                if (hasSourceMaterialIndices) materialsChunk.Write(slot.SourceMaterialIndex ?? -1);
                 materialsChunk.WriteFString(slot.SlotName);
                 materialsChunk.WriteFString(slot.UnrealMaterialPath);
                 materialsChunk.WriteFString(slot.MaterialJsonUri);
@@ -174,7 +179,8 @@ public static class FModelMaterialLinkWriter
         {
             if (slot.SlotIndex < 0) throw new ArgumentException("Material slot index must be non-negative.", nameof(links));
             if (!slots.TryAdd(slot.SlotIndex, slot)) throw new ArgumentException("Material slot indexes must be unique.", nameof(links));
-            ValidateLogicalUri(slot.MaterialJsonUri, nameof(slot.MaterialJsonUri), mode, allowRelativeTraversal: false);
+            if (slot.SourceMaterialIndex is < 0) throw new ArgumentException("Source material index must be non-negative.", nameof(links));
+            ValidateLogicalUri(slot.MaterialJsonUri, nameof(slot.MaterialJsonUri), mode);
 
             foreach (var parameter in slot.Parameters)
             {
@@ -198,7 +204,7 @@ public static class FModelMaterialLinkWriter
         {
             case 1:
                 if (parameter.TextureValue is null) throw new ArgumentException("Texture parameter is missing its texture reference.", nameof(parameter));
-                ValidateLogicalUri(parameter.TextureValue.Uri, nameof(parameter.TextureValue.Uri), mode, allowRelativeTraversal: true);
+                ValidateLogicalUri(parameter.TextureValue.Uri, nameof(parameter.TextureValue.Uri), mode);
                 break;
             case 2:
                 break;
@@ -210,16 +216,17 @@ public static class FModelMaterialLinkWriter
         }
     }
 
-    private static void ValidateLogicalUri(string value, string parameterName, MaterialLinkMode mode, bool allowRelativeTraversal)
+    private static void ValidateLogicalUri(string value, string parameterName, MaterialLinkMode mode)
     {
         if (string.IsNullOrWhiteSpace(value) || value.IndexOf('\0') >= 0 || value.IndexOf('\\') >= 0 || value[0] == '/' || IsDrivePath(value))
             throw new ArgumentException("Logical URI must be a non-rooted slash-separated path.", parameterName);
 
         if (value.Split('/').Any(segment => segment is "" or "."))
             throw new ArgumentException("Logical URI contains an empty or traversal segment.", parameterName);
-        if (!allowRelativeTraversal && mode == MaterialLinkMode.Relative && value.StartsWith("../", StringComparison.Ordinal) && value.Split('/').Skip(1).All(segment => segment != ".."))
+        var segments = value.Split('/');
+        if (mode == MaterialLinkMode.Relative && segments.SkipWhile(segment => segment == "..").All(segment => segment != ".."))
             return;
-        if (!allowRelativeTraversal && value.Split('/').Any(segment => segment == ".."))
+        if (segments.Any(segment => segment == ".."))
             throw new ArgumentException("Bundle URI contains a traversal segment.", parameterName);
     }
 

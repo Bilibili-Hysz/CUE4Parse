@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Reflection;
 using CUE4Parse_Conversion;
 using CUE4Parse_Conversion.UEFormat;
 using CUE4Parse_Conversion.UEFormat.MaterialLinks;
@@ -418,6 +419,250 @@ public class UESceneBundleExporterTests
         Assert.Equal(material.Sha256, bndx.Sha256);
         Assert.Equal(material.ByteLength, bndx.ByteLength);
         Assert.DoesNotContain(scene.Diagnostics!, diagnostic => diagnostic.Code == UESceneDiagnosticCodes.MissingMaterialSidecar);
+    }
+
+    [Fact]
+    public void TryWriteToDirRetainsRawGameMaterialOverrideWhenProducerUsesCanonicalPath()
+    {
+        using var temp = new TestDirectory();
+        const string rawMaterialPath = "Game/Materials/M_Override";
+        const string canonicalMaterialPath = "/Game/Materials/M_Override";
+        const string materialUri = "Materials/M_Override.json";
+        var component = Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair") with
+        {
+            OverrideMaterialPaths = [rawMaterialPath]
+        };
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", component)));
+        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
+            resource.LogicalUri, [1], [new(0)],
+            [new("material:" + canonicalMaterialPath, BundleResourceKind.MaterialJson, materialUri, "application/json", [4])],
+            [new(0, 0, canonicalMaterialPath)]));
+
+        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
+        var canonicalMaterial = Assert.Single(scene.Assets!, asset => asset.Kind == AssetKind.Material && asset.CanonicalUnrealPath == canonicalMaterialPath);
+        var materialOverride = Assert.Single(scene.MaterialOverrides!);
+        var bndx = Assert.Single(scene.BundleEntries!, entry => entry.ResourceKind == (byte) BundleResourceKind.MaterialJson);
+        Assert.Equal(canonicalMaterial.AssetId, materialOverride.OverrideMaterialAssetId);
+        Assert.Equal(Availability.Available, canonicalMaterial.Availability);
+        Assert.Equal(materialUri, bndx.LogicalUri);
+        Assert.Equal(canonicalMaterial.AssetId, bndx.OwnerAssetId);
+        Assert.DoesNotContain(scene.Diagnostics!, diagnostic => diagnostic.Code == UESceneDiagnosticCodes.MaterialOverrideMismatch);
+    }
+
+    [Fact]
+    public void TryWriteToDirRetainsRawEngineMaterialOverrideWhenProducerUsesCanonicalPath()
+    {
+        using var temp = new TestDirectory();
+        const string rawMaterialPath = "Engine/Materials/M_Override";
+        const string canonicalMaterialPath = "/Engine/Materials/M_Override";
+        const string materialUri = "Materials/M_Override.json";
+        var component = Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair") with
+        {
+            OverrideMaterialPaths = [rawMaterialPath]
+        };
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", component)));
+        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
+            resource.LogicalUri, [1], [new(0)],
+            [new("material:" + canonicalMaterialPath, BundleResourceKind.MaterialJson, materialUri, "application/json", [4])],
+            [new(0, 0, canonicalMaterialPath)]));
+
+        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
+        var canonicalMaterial = Assert.Single(scene.Assets!, asset => asset.Kind == AssetKind.Material && asset.CanonicalUnrealPath == canonicalMaterialPath);
+        var materialOverride = Assert.Single(scene.MaterialOverrides!);
+        var bndx = Assert.Single(scene.BundleEntries!, entry => entry.ResourceKind == (byte) BundleResourceKind.MaterialJson);
+        Assert.Equal(canonicalMaterial.AssetId, materialOverride.OverrideMaterialAssetId);
+        Assert.Equal(Availability.Available, canonicalMaterial.Availability);
+        Assert.Equal(materialUri, bndx.LogicalUri);
+        Assert.Equal(canonicalMaterial.AssetId, bndx.OwnerAssetId);
+        Assert.DoesNotContain(scene.Diagnostics!, diagnostic => diagnostic.Code == UESceneDiagnosticCodes.MaterialOverrideMismatch);
+    }
+
+    [Theory]
+    [InlineData("/Game/Materials/M_Override.M_Override", true)]
+    [InlineData("/Game/Materials/M_Override.M_Different", false)]
+    [InlineData("M_Override.M_Override", false)]
+    [InlineData("Materials/M_Override.M_Override", false)]
+    public void TryWriteToDirReconcilesPackageQualifiedProducedMaterialSlots(string producedMaterialPath, bool retainsOverride)
+    {
+        using var temp = new TestDirectory();
+        var component = Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair") with
+        {
+            OverrideMaterialPaths = ["/Game/Materials/M_Override"]
+        };
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", component)));
+        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
+            resource.LogicalUri, [1], [new(0)],
+            [new("material:/Game/Materials/M_Override", BundleResourceKind.MaterialJson, "Materials/M_Override.json", "application/json", [4])],
+            [new(0, 0, producedMaterialPath)]));
+
+        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
+        Assert.Equal(retainsOverride, scene.MaterialOverrides!.Count == 1);
+        Assert.Equal(!retainsOverride, scene.Diagnostics!.Any(diagnostic => diagnostic.Code == UESceneDiagnosticCodes.MaterialOverrideMismatch));
+    }
+
+    [Theory]
+    [InlineData("/Game/Materials/M_Override.M_Override", "/Game/Materials/M_Override")]
+    [InlineData("M_Override.M_Override", "M_Override.M_Override")]
+    [InlineData("Materials/M_Override.M_Override", "Materials/M_Override.M_Override")]
+    [InlineData("/Game//M.M", "/Game//M.M")]
+    [InlineData("/Game/./M.M", "/Game/./M.M")]
+    [InlineData("/Game/M..M", "/Game/M..M")]
+    [InlineData("//Game/M.M", "//Game/M.M")]
+    public void NormalizeUnrealAssetIdentityOnlyCollapsesAbsolutePackagePaths(string input, string expected)
+    {
+        var normalize = typeof(UESceneBundleExporter).GetMethod("NormalizeUnrealAssetIdentity", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        Assert.Equal(expected, normalize.Invoke(null, [input]));
+    }
+
+    [Theory]
+    [InlineData("/Game//M", "/Game//M.M")]
+    [InlineData("/Game/./M", "/Game/./M.M")]
+    [InlineData("/Game/M", "/Game/M..M")]
+    [InlineData("//Game/M", "//Game/M.M")]
+    public void TryWriteToDirTreatsMalformedPackageQualifiedMaterialSlotsAsMismatches(string declaredMaterialPath, string producedMaterialPath)
+    {
+        using var temp = new TestDirectory();
+        var component = Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair") with
+        {
+            OverrideMaterialPaths = [declaredMaterialPath]
+        };
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", component)));
+        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
+            resource.LogicalUri, [1], [new(0)], [], [new(0, 0, producedMaterialPath)]));
+
+        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
+        Assert.Empty(scene.MaterialOverrides!);
+        Assert.Contains(scene.Diagnostics!, diagnostic => diagnostic.Code == UESceneDiagnosticCodes.MaterialOverrideMismatch);
+    }
+
+    [Theory]
+    [InlineData("/Game//M.M")]
+    [InlineData("M.M")]
+    [InlineData("Materials/M.M")]
+    [InlineData("/Game/./M.M")]
+    [InlineData("/Game/M..M")]
+    [InlineData("//Game/M.M")]
+    [InlineData("/Game/M.Different")]
+    public void TryWriteToDirTreatsIdenticalMalformedMaterialSlotsAsMismatches(string malformedMaterialPath)
+    {
+        using var temp = new TestDirectory();
+        var component = Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair") with
+        {
+            OverrideMaterialPaths = [malformedMaterialPath]
+        };
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", component)));
+        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
+            resource.LogicalUri, [1], [new(0)], [], [new(0, 0, malformedMaterialPath)]));
+
+        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
+        Assert.Empty(scene.MaterialOverrides!);
+        Assert.Contains(scene.Diagnostics!, diagnostic => diagnostic.Code == UESceneDiagnosticCodes.MaterialOverrideMismatch);
+    }
+
+    [Fact]
+    public void TryWriteToDirUnlinksConflictingMappedMaterialOverrideAndDiagnosesIt()
+    {
+        using var temp = new TestDirectory();
+        var component = Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair") with
+        {
+            OverrideMaterialPaths = ["/Game/Materials/M_Declared", "/Game/Materials/M_Matching"]
+        };
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", component)));
+        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
+            resource.LogicalUri, [1], [new(0)],
+            [new("material:/Game/Materials/M_Produced", BundleResourceKind.MaterialJson, "Materials/M_Produced.json", "application/json", [4]),
+             new("material:/Game/Materials/M_Matching", BundleResourceKind.MaterialJson, "Materials/M_Matching.json", "application/json", [5])],
+            [new(0, 0, "/Game/Materials/M_Produced"), new(1, 1, "/Game/Materials/M_Matching")]));
+
+        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
+        var publishedComponent = Assert.Single(scene.Components!);
+        var overrides = scene.MaterialOverrides!;
+        var materialOverride = Assert.Single(overrides);
+        Assert.Equal(1u, materialOverride.SlotOrdinal);
+        Assert.NotEqual(0UL, materialOverride.OverrideMaterialAssetId);
+        Assert.Equal("/Game/Materials/M_Matching", scene.Assets!.Single(asset => asset.AssetId == materialOverride.OverrideMaterialAssetId).CanonicalUnrealPath);
+        Assert.Equal(1u, publishedComponent.MaterialOverrideCount);
+        Assert.NotEmpty(scene.Transforms!);
+        Assert.Single(scene.Assets!, asset => asset.Kind == AssetKind.StaticMesh);
+        Assert.Equal(2, scene.BundleEntries!.Count(entry => entry.ResourceKind == (byte) BundleResourceKind.MaterialJson));
+        var diagnostic = Assert.Single(scene.Diagnostics!, item => item.Code == UESceneDiagnosticCodes.MaterialOverrideMismatch);
+        Assert.Equal(publishedComponent.ComponentId, diagnostic.SubjectId);
+        Assert.Equal("A.Mesh", diagnostic.SourceObjectPath);
+        Assert.Contains("source slot 0", diagnostic.Message);
+        Assert.Contains("/Game/Materials/M_Declared", diagnostic.Message);
+        Assert.Contains("/Game/Materials/M_Produced", diagnostic.Message);
+    }
+
+    [Fact]
+    public void TryWriteToDirRejectsDuplicateMatoKeysBeforeMismatchReconciliation()
+    {
+        using var temp = new TestDirectory();
+        var plan = PlanWithMismatchedMaterialSlot();
+        var first = plan.Document.MaterialOverrides![0];
+        plan.Document.MaterialOverrides.Add(first);
+        plan.Document.Components![0] = plan.Document.Components[0] with { MaterialOverrideCount = 2 };
+
+        var result = ExportWithMismatchedMaterialSlot(plan, temp.Directory);
+
+        Assert.False(result.Success);
+        Assert.Equal(SceneExportErrorCode.InvalidData, result.Failure?.Code);
+        Assert.Contains("Duplicate MATO", result.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(0, "flags")]
+    [InlineData(1, "offset")]
+    [InlineData(2, "reserved")]
+    public void TryWriteToDirRejectsMalformedMatoBeforeMismatchReconciliation(int malformedField, string expectedError)
+    {
+        using var temp = new TestDirectory();
+        var plan = PlanWithMismatchedMaterialSlot();
+        var materialOverride = plan.Document.MaterialOverrides![0];
+        plan.Document.MaterialOverrides[0] = malformedField switch
+        {
+            0 => materialOverride with { Flags = 2 },
+            1 => materialOverride with { ParameterPayloadOffset = 1 },
+            _ => materialOverride with { Reserved = 1 }
+        };
+
+        var result = ExportWithMismatchedMaterialSlot(plan, temp.Directory);
+
+        Assert.False(result.Success);
+        Assert.Equal(SceneExportErrorCode.InvalidData, result.Failure?.Code);
+        Assert.Contains(expectedError, result.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TryWriteToDirClassifiesInvalidMatoRangeAsInvalidDataBeforeReconciliation()
+    {
+        using var temp = new TestDirectory();
+        var plan = PlanWithMismatchedMaterialSlot();
+        plan.Document.Components![0] = plan.Document.Components[0] with { MaterialOverrideStart = 1, MaterialOverrideCount = 1 };
+
+        var result = ExportWithMismatchedMaterialSlot(plan, temp.Directory);
+
+        Assert.False(result.Success);
+        Assert.Equal(SceneExportErrorCode.InvalidData, result.Failure?.Code);
+        Assert.Contains("MATO range out of bounds", result.Error!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1314,6 +1559,13 @@ public class UESceneBundleExporterTests
                 type is "Point" or "Spot" ? 3 : 0, type is "Point" or "Spot" ? 4 : 0, type is "Point" or "Spot" ? 5 : 0,
                 type == "Directional" ? .5f : 0, type == "Directional" ? .25f : 0, type == "Rect" ? 45 : 0, type == "Rect" ? 6 : 0)
         };
+    private static UESceneBundlePlan PlanWithMismatchedMaterialSlot() =>
+        UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A",
+            ComponentWithOverrides("A.Mesh", "StaticMesh", "/Game/Meshes/Chair", ["/Game/Materials/M_Declared"]))));
+    private static SceneExportResult ExportWithMismatchedMaterialSlot(UESceneBundlePlan plan, DirectoryInfo directory) =>
+        new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
+            resource.LogicalUri, [1], [new(0)], [], [new(0, 0, "/Game/Materials/M_Produced")]))
+            .TryWriteToDir(directory, CancellationToken.None);
     private static UEScenePlanningTransform Transform(float x = 0, float y = 0, float z = 0, float rx = 0, float ry = 0, float rz = 0, float rw = 1, float sx = 1, float sy = 1, float sz = 1) => new(x, y, z, rx, ry, rz, rw, sx, sy, sz);
     private static string WriteExistingScene(DirectoryInfo root)
     {

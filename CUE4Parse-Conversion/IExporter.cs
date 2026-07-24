@@ -99,6 +99,9 @@ namespace CUE4Parse_Conversion
             Options = options;
         }
 
+        // Test seam for platforms where creating a directory link requires elevated privileges.
+        internal Func<string, FileAttributes?>? PathAttributes { get; set; }
+
         public abstract bool TryWriteToDir(DirectoryInfo baseDirectory, out string label, out string savedFilePath);
         public abstract bool TryWriteToZip(out byte[] zipFile);
         public abstract void AppendToZip();
@@ -125,8 +128,31 @@ namespace CUE4Parse_Conversion
             if (!ret.StartsWith(baseDirectory.FullName.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal)
                 && !ret.Equals(baseDirectory.FullName, StringComparison.Ordinal))
                 throw new InvalidOperationException($"Path escape detected: '{combined}' resolves outside base directory '{baseDirectory.FullName}'.");
-            Directory.CreateDirectory(ret.Replace('\\', '/').SubstringBeforeLast('/'));
+            var directory = Path.GetDirectoryName(ret) ?? baseDirectory.FullName;
+            EnsureSafeDirectoryAncestors(baseDirectory.FullName, directory);
+            Directory.CreateDirectory(directory);
+            EnsureSafeDirectoryAncestors(baseDirectory.FullName, directory);
             return ret;
+        }
+
+        private void EnsureSafeDirectoryAncestors(string rootPath, string targetPath)
+        {
+            EnsureNotReparsePoint(rootPath);
+            var current = rootPath;
+            foreach (var segment in Path.GetRelativePath(rootPath, targetPath).Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            {
+                if (segment is "" or ".") continue;
+                current = Path.Combine(current, segment);
+                if (Directory.Exists(current)) EnsureNotReparsePoint(current);
+            }
+        }
+
+        private void EnsureNotReparsePoint(string path)
+        {
+            var attributes = PathAttributes?.Invoke(path);
+            if (attributes is null && Directory.Exists(path)) attributes = File.GetAttributes(path);
+            if (attributes is not null && (attributes.Value & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Export target traverses reparse point '{path}'.");
         }
     }
 

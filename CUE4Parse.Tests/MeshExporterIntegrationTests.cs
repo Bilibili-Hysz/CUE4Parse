@@ -1,5 +1,6 @@
 using CUE4Parse_Conversion;
 using CUE4Parse_Conversion.Meshes;
+using CUE4Parse_Conversion.Meshes.PSK;
 using CUE4Parse_Conversion.UEFormat;
 using CUE4Parse_Conversion.UEFormat.MaterialLinks;
 
@@ -57,6 +58,16 @@ public class MeshExporterIntegrationTests
     }
 
     [Fact]
+    public void UeFormatBundleConfiguration_RejectsMissingPhysicalRoot()
+    {
+        var options = new ExporterOptions { MaterialLinkMode = MaterialLinkMode.Bundle, MeshFormat = EMeshFormat.UEFormat };
+
+        var error = Assert.Throws<ArgumentException>(() => MeshExporter.ValidateUeFormatBundleConfiguration(options));
+
+        Assert.Contains("absolute physical bundle root", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void UeFormatAllLods_RejectsDivergentMaterialTopology()
     {
         var error = Assert.Throws<InvalidDataException>(() => MeshExporter.ValidateUeFormatMaterialTopology([
@@ -87,6 +98,28 @@ public class MeshExporterIntegrationTests
             (0u, (IReadOnlyList<(int SourceMaterialIndex, int SectionIndex)>)[(0, 0), (1, 1)]),
             (2u, (IReadOnlyList<(int SourceMaterialIndex, int SectionIndex)>)[(0, 0), (1, 1)])
         ]);
+    }
+
+    [Fact]
+    public void SkeletalUeFormatLods_PreserveSourceIdentityAndRejectDivergentTopology()
+    {
+        var first = CreateSkeletalLod(0);
+        var second = CreateSkeletalLod(0);
+
+        var included = MeshExporter.PrepareUeFormatLods([
+            (Lod: (CBaseMeshLod) first, SourceLodIndex: 2u),
+            (Lod: (CBaseMeshLod) second, SourceLodIndex: 5u)
+        ], ELodFormat.AllLods);
+
+        Assert.Equal([2u, 5u], included.Select(entry => entry.SourceLodIndex));
+
+        second.Sections = new Lazy<CMeshSection[]>(() => [new CMeshSection(2, 0, 1, null, null)]);
+        var error = Assert.Throws<InvalidDataException>(() => MeshExporter.PrepareUeFormatLods([
+            (Lod: (CBaseMeshLod) first, SourceLodIndex: 2u),
+            (Lod: (CBaseMeshLod) second, SourceLodIndex: 5u)
+        ], ELodFormat.AllLods));
+
+        Assert.Contains("LOD 5", error.Message);
     }
 
     [Fact]
@@ -140,6 +173,49 @@ public class MeshExporterIntegrationTests
         Assert.StartsWith(tempDir.Directory.FullName + Path.DirectorySeparatorChar, target, StringComparison.Ordinal);
         Assert.Equal([1, 2, 3], File.ReadAllBytes(target));
         Assert.True(File.Exists(Path.Combine(tempDir.Directory.FullName, "Models/M.uemodel")));
+    }
+
+    [Fact]
+    public void ExternalResource_RejectsReparsePointAncestorWithoutPublishingModel()
+    {
+        using var tempDir = new TemporaryDirectory();
+        var textures = Path.Combine(tempDir.Directory.FullName, "Textures");
+        Directory.CreateDirectory(textures);
+
+        var manifest = new ResourceManifest();
+        manifest.AddOrGet("/Game/Textures/T.T", "Textures/T.png", "image/png", [1], true, "Textures/T.png");
+        var mesh = new Mesh("Models/M.uemodel", [2], [])
+        {
+            ExportManifest = manifest,
+            PathAttributes = path => path == textures ? FileAttributes.Directory | FileAttributes.ReparsePoint : null
+        };
+
+        Assert.False(new MeshExporter([mesh]).TryWriteToDir(tempDir.Directory, out _, out _));
+        Assert.False(File.Exists(Path.Combine(textures, "T.png")));
+        Assert.False(File.Exists(Path.Combine(tempDir.Directory.FullName, "Models/M.uemodel")));
+    }
+
+    [Fact]
+    public void ExternalResource_ReparsePointRejectionPreservesExistingModel()
+    {
+        using var tempDir = new TemporaryDirectory();
+        var textures = Path.Combine(tempDir.Directory.FullName, "Textures");
+        var modelPath = Path.Combine(tempDir.Directory.FullName, "Models/M.uemodel");
+        Directory.CreateDirectory(textures);
+        Directory.CreateDirectory(Path.GetDirectoryName(modelPath)!);
+        File.WriteAllBytes(modelPath, [9]);
+
+        var manifest = new ResourceManifest();
+        manifest.AddOrGet("/Game/Textures/T.T", "Textures/T.png", "image/png", [1], true, "Textures/T.png");
+        var mesh = new Mesh("Models/M.uemodel", [2], [])
+        {
+            ExportManifest = manifest,
+            PathAttributes = path => path == textures ? FileAttributes.Directory | FileAttributes.ReparsePoint : null
+        };
+
+        Assert.False(new MeshExporter([mesh]).TryWriteToDir(tempDir.Directory, out _, out _));
+        Assert.Equal([9], File.ReadAllBytes(modelPath));
+        Assert.False(File.Exists(Path.Combine(textures, "T.png")));
     }
 
     [Fact]
@@ -327,6 +403,12 @@ public class MeshExporterIntegrationTests
         public bool TryWriteToZip(out byte[] zipFile) { zipFile = []; return false; }
         public void AppendToZip() { }
     }
+
+    private static CSkelMeshLod CreateSkeletalLod(int materialIndex) => new()
+    {
+        Sections = new Lazy<CMeshSection[]>(() => [new CMeshSection(materialIndex, 0, 1, null, null)]),
+        Indices = new Lazy<uint[]>(() => [0, 1, 2])
+    };
 
     private sealed class TemporaryDirectory : IDisposable
     {

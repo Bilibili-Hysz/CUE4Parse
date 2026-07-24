@@ -95,7 +95,9 @@ public sealed class UESceneBundleExporter
             }
 
             ValidateSidecars(producedResources.Values.SelectMany(resource => resource.Sidecars), bundleRoot);
-            ValidateMaterialOverrideLinks(_plan.Document, producedResources);
+            // Reconciliation may remove mismatched overrides, so validate the original graph first.
+            _ = UESceneWriter.Write(_plan.Document);
+            var reconciledDocument = ReconcileMaterialOverrideLinks(_plan.Document, producedResources);
             ValidateFinalResources(producedResources.Values.Select(resource =>
                     new UESceneFinalResource((byte) BundleResourceKind.Model, 0, resource.LogicalUri, "", resource.Bytes))
                 .Concat(producedResources.Values.SelectMany(resource => resource.Sidecars)
@@ -118,7 +120,7 @@ public sealed class UESceneBundleExporter
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            var document = FinalizeDocument(_plan.Document, staged, producedResources);
+            var document = FinalizeDocument(reconciledDocument, staged, producedResources);
             var finalPlan = CreateFinalPlan(document, producedResources);
             ValidateFinalResources(finalPlan.Resources, bundleRoot, scenePath);
             foreach (var resource in finalPlan.Resources.Where(resource => resource.ResourceKind != (byte) BundleResourceKind.Model))
@@ -131,7 +133,7 @@ public sealed class UESceneBundleExporter
                 staged.Add(resource.LogicalUri, (stagedPath, SHA256.HashData(verified), checked((ulong) verified.Length), []));
             }
             // Rebuild all ASST/BNDX facts from the bytes reread from staging.
-            document = FinalizeDocument(_plan.Document, staged, producedResources);
+            document = FinalizeDocument(reconciledDocument, staged, producedResources);
             finalPlan = CreateFinalPlan(document, producedResources);
             var sceneBytes = UESceneWriter.Write(document);
             UESceneReader.Read(sceneBytes);
@@ -294,14 +296,16 @@ public sealed class UESceneBundleExporter
         }
     }
 
-    private static void ValidateMaterialOverrideLinks(UESceneDocument document,
+    private static UESceneDocument ReconcileMaterialOverrideLinks(UESceneDocument document,
         IReadOnlyDictionary<string, UESceneProducedResource> producedResources)
     {
         var assets = document.Assets ?? [];
-        var components = document.Components ?? [];
-        var overrides = document.MaterialOverrides ?? [];
+        var components = (document.Components ?? []).ToList();
+        var overrides = (document.MaterialOverrides ?? []).ToList();
+        var diagnostics = (document.Diagnostics ?? []).ToList();
         var entries = document.BundleEntries ?? [];
         var assetsById = assets.ToDictionary(asset => asset.AssetId);
+        var unlinkedOverrides = new HashSet<int>();
         foreach (var component in components)
         {
             var modelEntry = entries.SingleOrDefault(entry => entry.ResourceKind == (byte)BundleResourceKind.Model &&
@@ -312,18 +316,90 @@ public sealed class UESceneBundleExporter
             // producer supplies this manifest and is therefore verified strictly.
             if (produced.MaterialSlotMappings is null)
                 continue;
-            foreach (var materialOverride in overrides.Skip(checked((int)component.MaterialOverrideStart))
-                         .Take(checked((int)component.MaterialOverrideCount)))
+            var overrideStart = checked((int) component.MaterialOverrideStart);
+            foreach (var offset in Enumerable.Range(overrideStart, checked((int) component.MaterialOverrideCount)))
             {
+                var materialOverride = overrides[offset];
                 if (materialOverride.OverrideMaterialAssetId == 0) continue;
                 var expected = assetsById[materialOverride.OverrideMaterialAssetId].CanonicalUnrealPath;
                 var mapped = produced.MaterialSlots.Where(slot => slot.SourceMaterialIndex == materialOverride.SlotOrdinal).ToArray();
-                if (mapped.Length == 0)
-                    throw new InvalidDataException($"Component {component.ComponentId} material override source slot {materialOverride.SlotOrdinal} is absent from produced model '{modelEntry.LogicalUri}'.");
-                if (mapped.Any(slot => !StringComparer.Ordinal.Equals(slot.EffectiveMaterialPath, expected)))
-                    throw new InvalidDataException($"Component {component.ComponentId} material override source slot {materialOverride.SlotOrdinal} disagrees with produced model '{modelEntry.LogicalUri}'.");
+                if (mapped.Length != 0 && mapped.All(slot => UnrealAssetIdentityEquals(slot.EffectiveMaterialPath, expected)))
+                    continue;
+
+                var producedPaths = mapped.Length == 0
+                    ? "(no produced material mapping)"
+                    : string.Join(", ", mapped.Select(slot => slot.EffectiveMaterialPath).Distinct(StringComparer.Ordinal));
+                unlinkedOverrides.Add(offset);
+                diagnostics.Add(new(2, 3, UESceneDiagnosticCodes.MaterialOverrideMismatch, 0, component.ComponentId,
+                    component.SourceObjectPath,
+                    $"Component {component.ComponentId} material override source slot {materialOverride.SlotOrdinal} declared '{expected}' conflicts with produced material '{producedPaths}' in model '{modelEntry.LogicalUri}'; the scene material reference was removed.",
+                    0, 0, 0));
             }
         }
+        if (unlinkedOverrides.Count == 0) return document;
+
+        overrides = overrides.Where((_, index) => !unlinkedOverrides.Contains(index)).ToList();
+        for (var index = 0; index < components.Count; index++)
+        {
+            var componentId = components[index].ComponentId;
+            var owned = overrides.Select((materialOverride, overrideIndex) => (materialOverride, overrideIndex))
+                .Where(item => item.materialOverride.ComponentId == componentId).Select(item => item.overrideIndex).ToArray();
+            components[index] = components[index] with
+            {
+                MaterialOverrideStart = owned.Length == 0 ? 0u : checked((uint) owned[0]),
+                MaterialOverrideCount = checked((uint) owned.Length)
+            };
+        }
+        return document with { Components = components, MaterialOverrides = overrides, Diagnostics = diagnostics };
+    }
+
+    private static bool UnrealAssetIdentityEquals(string left, string right) =>
+        TryNormalizeUnrealAssetIdentityForComparison(left, out var normalizedLeft) &&
+        TryNormalizeUnrealAssetIdentityForComparison(right, out var normalizedRight) &&
+        StringComparer.Ordinal.Equals(normalizedLeft, normalizedRight);
+
+    private static bool TryNormalizeUnrealAssetIdentityForComparison(string path, out string normalized)
+    {
+        // Planning may retain raw Game/... or Engine/... forms while production emits canonical absolute paths.
+        // Keep this normalization local to reconciliation so resource identities remain raw-domain.
+        var comparisonPath = path.StartsWith("Game/", StringComparison.Ordinal) ||
+            path.StartsWith("Engine/", StringComparison.Ordinal) ? "/" + path : path;
+        return TryNormalizeUnrealAssetIdentity(comparisonPath, out normalized);
+    }
+
+    private static string NormalizeUnrealAssetIdentity(string path)
+    {
+        var slash = path.LastIndexOf('/');
+        if (path.Length < 4 || path[0] != '/' || path[1] == '/' || slash <= 1)
+            return path;
+
+        var packageSegments = path[1..slash].Split('/');
+        if (packageSegments.Any(segment => segment.Length == 0 || segment is "." or ".." || segment.Contains('.')))
+            return path;
+
+        var terminal = path[(slash + 1)..];
+        var dot = terminal.IndexOf('.');
+        return dot < 0
+            ? path
+            : dot > 0 && dot == terminal.LastIndexOf('.') && dot < terminal.Length - 1 &&
+              StringComparer.Ordinal.Equals(terminal[..dot], terminal[(dot + 1)..])
+                ? path[..(slash + 1 + dot)]
+                : path;
+    }
+
+    private static bool TryNormalizeUnrealAssetIdentity(string path, out string normalized)
+    {
+        normalized = NormalizeUnrealAssetIdentity(path);
+        if (normalized.Length < 4 || normalized[0] != '/' || normalized[1] == '/' || normalized.LastIndexOf('/') <= 1)
+            return false;
+
+        var slash = normalized.LastIndexOf('/');
+        var packageSegments = normalized[1..slash].Split('/');
+        if (packageSegments.Any(segment => segment.Length == 0 || segment is "." or ".." || segment.Contains('.')))
+            return false;
+
+        var terminal = normalized[(slash + 1)..];
+        return terminal.Length > 0 && terminal.IndexOf('.') < 0;
     }
 
     private static UESceneDocument FinalizeDocument(UESceneDocument source, IReadOnlyDictionary<string, (string stagedPath, byte[] sha256, ulong length, IReadOnlyList<UESceneProducedLod> lods)> staged, IReadOnlyDictionary<string, UESceneProducedResource> producedResources)
@@ -897,7 +973,7 @@ public sealed class UESceneBundleExporter
     private static IReadOnlyList<string?> NormalizeOverrideMaterialPaths(IReadOnlyList<string?> paths)
     {
         ArgumentNullException.ThrowIfNull(paths);
-        return paths.Select(path => string.IsNullOrWhiteSpace(path) ? null : path.Trim()).ToArray();
+        return paths.Select(path => string.IsNullOrWhiteSpace(path) ? null : MaterialLinkBuilder.NormalizeUnrealMaterialPath(path)).ToArray();
     }
 
     private static string LastName(string path) => path.Split(['/','.'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? path;
@@ -979,4 +1055,4 @@ public sealed record SceneExportResult(
 {
     public IReadOnlyList<SceneExportError> RecoveryErrors => StructuredRecoveryErrors ?? [];
 }
-public static class UESceneDiagnosticCodes { public const ushort StreamingLevels = 1, WorldPartition = 2, MissingMesh = 3, UnsupportedComponent = 4, UnsupportedParent = 5, UnsupportedSocket = 6, InvalidInstanceTransform = 7, MissingMaterialSidecar = 8, UnsupportedLight = 9; }
+public static class UESceneDiagnosticCodes { public const ushort StreamingLevels = 1, WorldPartition = 2, MissingMesh = 3, UnsupportedComponent = 4, UnsupportedParent = 5, UnsupportedSocket = 6, InvalidInstanceTransform = 7, MissingMaterialSidecar = 8, UnsupportedLight = 9, MaterialOverrideMismatch = 10; }

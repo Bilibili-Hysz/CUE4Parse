@@ -18,6 +18,7 @@ namespace CUE4Parse_Conversion.Materials
     public class MaterialExporter2 : ExporterBase
     {
         private readonly string _internalFilePath;
+        private readonly string _rawUnrealObjectPath;
         private readonly string _canonicalUnrealObjectPath;
         private readonly MaterialData _materialData;
         private MaterialLinkExportResult? _cachedResult;
@@ -26,6 +27,7 @@ namespace CUE4Parse_Conversion.Materials
         {
             Options = options;
             _internalFilePath = string.Empty;
+            _rawUnrealObjectPath = string.Empty;
             _canonicalUnrealObjectPath = string.Empty;
             _materialData = new MaterialData
             {
@@ -39,7 +41,8 @@ namespace CUE4Parse_Conversion.Materials
             if (unrealMaterial == null) return;
             _internalFilePath = (unrealMaterial.Owner?.Provider?.FixPath(unrealMaterial.Owner.Name) ??
                                   unrealMaterial.Name).SubstringBeforeLast('.');
-            _canonicalUnrealObjectPath = unrealMaterial.GetPathName();
+            _rawUnrealObjectPath = unrealMaterial.GetPathName();
+            _canonicalUnrealObjectPath = CanonicalizeUnrealObjectPath(_rawUnrealObjectPath);
 
             unrealMaterial.GetParams(_materialData.Parameters, Options.MaterialFormat);
             foreach ((string key, UUnrealMaterial value) in _materialData.Parameters.Textures)
@@ -108,10 +111,10 @@ namespace CUE4Parse_Conversion.Materials
             if (mode != MaterialLinkMode.Embedded)
             {
                 var json = JsonConvert.SerializeObject(_materialData, Formatting.Indented);
-                var jsonTargetPath = Options.UESceneResourceUriPolicy?.Allocate(MaterialIdentity(), UESceneResourceKind.Material, ".json")
+                var jsonTargetPath = Options.UESceneResourceUriPolicy?.Allocate(RawMaterialIdentity(), UESceneResourceKind.Material, ".json")
                     ?? BuildTargetPath(mode, layout, TrimLogicalRoot(result.JsonPath), MaterialExportResource.Material, _internalFilePath);
                 var jsonUri = MaterialLinkBuilder.BuildUri(mode, modelPath, jsonTargetPath, bundleRoot, layout);
-                manifest.AddOrGet("material:" + MaterialIdentity(),
+                manifest.AddOrGet("material:" + RawMaterialIdentity(),
                     jsonUri,
                     "application/json", System.Text.Encoding.UTF8.GetBytes(json), true, jsonTargetPath);
             }
@@ -133,9 +136,9 @@ namespace CUE4Parse_Conversion.Materials
             }
             parameters.AddRange(_materialData.Parameters.Scalars.Select(parameter => MaterialLinkSourceParameter.Scalar(parameter.Key, parameter.Value)));
             parameters.AddRange(_materialData.Parameters.Colors.Select(parameter => MaterialLinkSourceParameter.Vector(parameter.Key, parameter.Value.R, parameter.Value.G, parameter.Value.B, parameter.Value.A)));
-            var materialResource = manifest?.FindByPath("material:" + MaterialIdentity());
+            var materialResource = manifest?.FindByPath("material:" + RawMaterialIdentity());
             var materialJsonUri = materialResource?.RelativeUri ?? result.JsonPath;
-            return MaterialLinkBuilder.Build(mode, modelPath, materialJsonUri, _internalFilePath, parameters, bundleRoot, slotIndex, slotName, materialResource != null);
+            return MaterialLinkBuilder.Build(mode, modelPath, materialJsonUri, CanonicalMaterialIdentity(), parameters, bundleRoot, slotIndex, slotName, materialResource != null);
         }
 
         private static string BuildTargetPath(MaterialLinkMode mode, MaterialExportLayout layout, string path, MaterialExportResource resource, string identity) =>
@@ -147,7 +150,11 @@ namespace CUE4Parse_Conversion.Materials
             ? UESceneProjectExportUri.FromFixedPath(path, Options.UESceneProjectName, Path.GetExtension(path))
             : path;
 
-        private string MaterialIdentity() => string.IsNullOrEmpty(_canonicalUnrealObjectPath) ? _internalFilePath : _canonicalUnrealObjectPath;
+        private string RawMaterialIdentity() => string.IsNullOrEmpty(_rawUnrealObjectPath) ? _internalFilePath : _rawUnrealObjectPath;
+
+        private string CanonicalMaterialIdentity() => string.IsNullOrEmpty(_canonicalUnrealObjectPath) ? _internalFilePath : _canonicalUnrealObjectPath;
+
+        private static string CanonicalizeUnrealObjectPath(string path) => "/" + path.TrimStart('/');
 
         private static string Mime(string ext) => ext.ToLowerInvariant() switch
         {
@@ -162,21 +169,36 @@ namespace CUE4Parse_Conversion.Materials
             label = string.Empty;
             savedFilePath = string.Empty;
 
-            savedFilePath = FixAndCreatePath(baseDirectory, _internalFilePath, "json");
-            WriteAtomic(savedFilePath, System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(_materialData, Formatting.Indented)));
-            label = Path.GetFileName(savedFilePath);
-
-            // Reuse cached decode results to avoid double decode
-            var result = GetMaterialLinkExportResult();
-            foreach (var texture in result.Textures)
+            try
             {
-                var texturePath = FixAndCreatePath(baseDirectory, texture.Uri);
-                var textureDir = Path.GetDirectoryName(texturePath);
-                if (textureDir != null) Directory.CreateDirectory(textureDir);
-                WriteAtomic(texturePath, texture.Bytes);
-            }
+                savedFilePath = FixAndCreatePath(baseDirectory, _internalFilePath, "json");
+                WriteAtomic(savedFilePath, System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(_materialData, Formatting.Indented)));
+                label = Path.GetFileName(savedFilePath);
 
-            return true;
+                // Reuse cached decode results to avoid double decode
+                var result = GetMaterialLinkExportResult();
+                foreach (var texture in result.Textures)
+                {
+                    var texturePath = FixAndCreatePath(baseDirectory, texture.Uri);
+                    var textureDir = Path.GetDirectoryName(texturePath);
+                    if (textureDir != null) Directory.CreateDirectory(textureDir);
+                    WriteAtomic(texturePath, texture.Bytes);
+                }
+
+                return true;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
         }
 
         private static void WriteAtomic(string targetPath, byte[] bytes)

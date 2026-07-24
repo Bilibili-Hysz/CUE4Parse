@@ -108,12 +108,9 @@ namespace CUE4Parse_Conversion.Meshes
             if (Options.MeshFormat == EMeshFormat.UEFormat)
             {
                 using var ueModelArchive = new FArchiveWriter();
-                var includedLods = convertedMesh.LODs.Select((lod, sourceLodIndex) => (lod, sourceLodIndex))
-                    .Where(entry => !entry.lod.SkipLod).ToList();
-                if (Options.LodFormat == ELodFormat.AllLods)
-                    ValidateUeFormatMaterialTopology(includedLods.Select(entry =>
-                        (checked((uint) entry.sourceLodIndex), entry.lod.GetSectionMaterialIndices())).ToList());
-                var materialLod = includedLods[0].lod;
+                var includedLods = PrepareUeFormatLods(convertedMesh.LODs
+                    .Select((lod, sourceLodIndex) => ((CBaseMeshLod) lod, checked((uint) sourceLodIndex))), Options.LodFormat);
+                var materialLod = includedLods[0].Lod;
                 var materialSlots = materialLod.GetMaterialsWithSlotIndices(options, overrideMaterials);
                 var materials = materialSlots.Select(slot => slot.Exporter).ToList();
                 var mode = Options.MaterialLinkMode;
@@ -132,7 +129,7 @@ namespace CUE4Parse_Conversion.Meshes
                     manifest.Seal();
                 }
 
-                var materialLinks = BuildMaterialLinks(materialSlots, logicalModelPath, manifest);
+                var materialLinks = BuildMaterialLinks(materialSlots, logicalModelPath, manifest, materialLod.GetSectionMaterialIndices());
                 foreach (var (sourceMaterialIndex, sectionIndex) in materialLod.GetSectionMaterialIndices())
                 {
                     var link = materialLinks.Slots.FirstOrDefault(slot => slot.SlotIndex == sectionIndex);
@@ -224,7 +221,13 @@ namespace CUE4Parse_Conversion.Meshes
             if (Options.MeshFormat == EMeshFormat.UEFormat)
             {
                 using var ueModelArchive = new FArchiveWriter();
-                var materialSlots = convertedMesh.LODs[0].GetMaterialsWithSlotIndices(options);
+                var includedLods = PrepareUeFormatLods(convertedMesh.LODs
+                    .Select(lod => ((CBaseMeshLod) lod, checked((uint) lod.LODIndex))), Options.LodFormat);
+                foreach (var entry in includedLods)
+                    DeclaredLods.Add((entry.SourceLodIndex, entry.Lod.ScreenSize));
+
+                var materialLod = includedLods[0].Lod;
+                var materialSlots = materialLod.GetMaterialsWithSlotIndices(options);
                 var materials = materialSlots.Select(slot => slot.Exporter).ToList();
                 var mode = Options.MaterialLinkMode;
                 var logicalModelPath = mode == MaterialLinkMode.Bundle
@@ -242,7 +245,15 @@ namespace CUE4Parse_Conversion.Meshes
                     manifest.Seal();
                 }
 
-                new UEModel(originalMesh.Name, convertedMesh, Options.ExportMorphTargets ? originalMesh.MorphTargets : null, totalSockets.ToArray(), originalMesh.Skeleton, originalMesh.PhysicsAsset, Options, mode, BuildMaterialLinks(materialSlots, logicalModelPath, manifest)).Save(ueModelArchive);
+                var materialLinks = BuildMaterialLinks(materialSlots, logicalModelPath, manifest, materialLod.GetSectionMaterialIndices());
+                foreach (var (sourceMaterialIndex, sectionIndex) in materialLod.GetSectionMaterialIndices())
+                {
+                    var link = materialLinks.Slots.FirstOrDefault(slot => slot.SlotIndex == sectionIndex);
+                    if (link is not null)
+                        EffectiveMaterialSlots.Add(new UESceneProducedMaterialSlot(
+                            checked((uint) sourceMaterialIndex), checked((uint) sectionIndex), link.UnrealMaterialPath));
+                }
+                new UEModel(originalMesh.Name, convertedMesh, Options.ExportMorphTargets ? originalMesh.MorphTargets : null, totalSockets.ToArray(), originalMesh.Skeleton, originalMesh.PhysicsAsset, Options, mode, materialLinks).Save(ueModelArchive);
                 MeshLods.Add(new Mesh(mode == MaterialLinkMode.Bundle ? logicalModelPath : modelPath, ueModelArchive.GetBuffer(), materials) { ExportManifest = manifest });
                 return;
             }
@@ -301,12 +312,23 @@ namespace CUE4Parse_Conversion.Meshes
             ? UESceneProjectExportUri.FromFixedPath(path, Options.UESceneProjectName, Path.GetExtension(path))
             : path;
 
-        private FModelMaterialLinks BuildMaterialLinks(IEnumerable<(int SlotIndex, MaterialExporter2 Exporter)> materials, string modelPath, ResourceManifest? manifest = null)
+        private FModelMaterialLinks BuildMaterialLinks(IEnumerable<(int SlotIndex, MaterialExporter2 Exporter)> materials, string modelPath,
+            ResourceManifest? manifest = null, IReadOnlyList<(int SourceMaterialIndex, int SectionIndex)>? topology = null)
         {
             var links = new FModelMaterialLinks();
+            links.WriteSourceMaterialIndices = topology is not null;
             foreach (var (slotIndex, exporter) in materials)
             {
                 var materialLinks = exporter.BuildMaterialLinks(Options.MaterialLinkMode, modelPath, slotIndex, slotIndex.ToString(), Options.MaterialLinkBundleRoot, manifest, Options.MaterialExportLayout);
+                int? sourceMaterialIndex = null;
+                if (topology is not null)
+                {
+                    var mapping = topology.FirstOrDefault(entry => entry.SectionIndex == slotIndex);
+                    if (topology.Any(entry => entry.SectionIndex == slotIndex))
+                        sourceMaterialIndex = mapping.SourceMaterialIndex;
+                }
+                foreach (var slot in materialLinks.Slots)
+                    slot.SourceMaterialIndex = sourceMaterialIndex;
                 links.Slots.AddRange(materialLinks.Slots);
                 links.PbrInterfaces.AddRange(materialLinks.PbrInterfaces);
             }
@@ -325,11 +347,23 @@ namespace CUE4Parse_Conversion.Meshes
             }
         }
 
-        private void ValidateBundleConfiguration()
+        internal static List<(CBaseMeshLod Lod, uint SourceLodIndex)> PrepareUeFormatLods(
+            IEnumerable<(CBaseMeshLod Lod, uint SourceLodIndex)> lods, ELodFormat lodFormat)
         {
-            if (Options.MaterialLinkMode == MaterialLinkMode.Bundle && Options.MeshFormat == EMeshFormat.UEFormat)
-                MaterialLinkBuilder.ValidateBundleRoot(Options.MaterialLinkBundleRoot);
+            var included = lods.Where(entry => !entry.Lod.SkipLod).ToList();
+            if (lodFormat == ELodFormat.AllLods)
+                ValidateUeFormatMaterialTopology(included.Select(entry =>
+                    (entry.SourceLodIndex, entry.Lod.GetSectionMaterialIndices())).ToList());
+            return included;
         }
+
+        internal static void ValidateUeFormatBundleConfiguration(ExporterOptions options)
+        {
+            if (options.MaterialLinkMode == MaterialLinkMode.Bundle && options.MeshFormat == EMeshFormat.UEFormat)
+                MaterialLinkBuilder.ValidateBundleRoot(options.MaterialLinkBundleRoot);
+        }
+
+        private void ValidateBundleConfiguration() => ValidateUeFormatBundleConfiguration(Options);
 
         /// <param name="baseDirectory"></param>
         /// <param name="label"></param>

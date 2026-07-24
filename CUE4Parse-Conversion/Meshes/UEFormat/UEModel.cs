@@ -199,7 +199,7 @@ public class UEModel : UEFormatExport
             {
                 var section = sections[sectionIndex];
                 var materialLink = materialLinks?.Slots.FirstOrDefault(slot => slot.SlotIndex == sectionIndex);
-                var materialPath = materialLink?.UnrealMaterialPath ?? section.Material?.GetPathName() ?? string.Empty;
+                var materialPath = MaterialLinkBuilder.NormalizeUnrealMaterialPath(materialLink?.UnrealMaterialPath ?? section.Material?.GetPathName() ?? string.Empty);
                 var materialName = MaterialDisplayName(materialPath) ?? section.Material?.Name.Text ?? section.MaterialName ?? string.Empty;
                 materialChunk.WriteFString(materialName);
                 materialChunk.WriteFString(materialPath);

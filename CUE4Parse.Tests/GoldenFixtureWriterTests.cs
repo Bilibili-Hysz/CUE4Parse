@@ -35,7 +35,50 @@ public class GoldenFixtureWriterTests
             File.WriteAllBytes(outputPath, bytes);
         }
 
+        var deepRelativePath = Environment.GetEnvironmentVariable("FMODEL_DEEP_RELATIVE_FIXTURE_PATH");
+        if (!string.IsNullOrWhiteSpace(deepRelativePath))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(deepRelativePath)!);
+            File.WriteAllBytes(deepRelativePath, BuildDeepRelativeFixture());
+        }
+
         Assert.Equal("d5f0724e6d45824148f9d572122aedc2eb2ef05312fc8da58816fd38b6346722", Convert.ToHexStringLower(SHA256.HashData(bytes)));
+    }
+
+    private static byte[] BuildDeepRelativeFixture()
+    {
+        var model = new FArchiveWriter();
+        WriteStandardGeometry(model);
+        FModelMaterialLinkWriter.Write(model, MaterialLinkMode.Relative, new FModelMaterialLinks
+        {
+            Slots =
+            [
+                new FModelMaterialSlot
+                {
+                    SlotIndex = 0,
+                    SlotName = "Deep",
+                    UnrealMaterialPath = "/Game/Materials/M_Deep.M_Deep",
+                    MaterialJsonUri = "../../Materials/M_Deep.json",
+                    Parameters =
+                    [
+                        FModelMaterialParameter.Texture("BaseColor", "base_color", new FModelTextureReference
+                        {
+                            UnrealObjectPath = "/Game/Textures/T_Deep.T_Deep",
+                            Uri = "../../Textures/T_Deep.png",
+                            Mime = "image/png"
+                        })
+                    ]
+                }
+            ]
+        });
+
+        var fixture = new FArchiveWriter();
+        var header = new FUEFormatHeader("UEMODEL", "FModelDeepRelative");
+        header.UncompressedSize = checked((int) model.Length);
+        header.CompressedSize = checked((int) model.Length);
+        header.Serialize(fixture);
+        fixture.Write(model.GetBuffer());
+        return fixture.GetBuffer();
     }
 
     private static void WriteStandardGeometry(FArchiveWriter archive)

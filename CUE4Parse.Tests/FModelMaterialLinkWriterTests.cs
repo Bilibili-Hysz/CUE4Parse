@@ -31,6 +31,38 @@ public class FModelMaterialLinkWriterTests
     }
 
     [Fact]
+    public void MaterialsV2_WritesSourceMaterialIndexWithoutChangingSectionSlotIndex()
+    {
+        var archive = new FArchiveWriter();
+        var links = Links();
+        links.WriteSourceMaterialIndices = true;
+        links.Slots[0] = new FModelMaterialSlot
+        {
+            SlotIndex = 0,
+            SourceMaterialIndex = 1,
+            SlotName = "Section0",
+            UnrealMaterialPath = "/Game/Materials/M_Section0.M_Section0",
+            MaterialJsonUri = "materials/section0.json"
+        };
+        links.Slots.Add(new FModelMaterialSlot
+        {
+            SlotIndex = 1,
+            SourceMaterialIndex = 0,
+            SlotName = "Section1",
+            UnrealMaterialPath = "/Game/Materials/M_Section1.M_Section1",
+            MaterialJsonUri = "materials/section1.json"
+        });
+
+        FModelMaterialLinkWriter.Write(archive, MaterialLinkMode.Relative, links);
+
+        var payload = ReadChunk(archive.GetBuffer(), out _, out var count);
+        Assert.Equal(2, count);
+        Assert.Equal((byte) 2, payload[0]);
+        Assert.Equal((0, 1), ReadMaterialSlotIndexes(payload, 0));
+        Assert.Equal((1, 0), ReadMaterialSlotIndexes(payload, 1));
+    }
+
+    [Fact]
     public void Bundle_UsesBundleLocationMode()
     {
         var archive = new FArchiveWriter();
@@ -355,11 +387,94 @@ public class FModelMaterialLinkWriterTests
     }
 
     [Fact]
+    public void RelativeMaterialJsonUri_AllowsMultipleLeadingParentSegments()
+    {
+        var archive = new FArchiveWriter();
+        var links = Links();
+        links.Slots[0] = new FModelMaterialSlot
+        {
+            SlotIndex = 4,
+            SlotName = "Body",
+            UnrealMaterialPath = "/Game/Materials/M_Body.M_Body",
+            MaterialJsonUri = "../../Materials/M_Body.json",
+            Parameters = links.Slots[0].Parameters
+        };
+
+        FModelMaterialLinkWriter.Write(archive, MaterialLinkMode.Relative, links);
+
+        Assert.NotEmpty(archive.GetBuffer());
+    }
+
+    [Theory]
+    [InlineData(MaterialLinkMode.Bundle, "../outside.png")]
+    [InlineData(MaterialLinkMode.Bundle, "Textures/../../outside.png")]
+    [InlineData(MaterialLinkMode.Embedded, "../outside.png")]
+    [InlineData(MaterialLinkMode.Embedded, "Textures/../../outside.png")]
+    public void TextureUris_RejectTraversalOutsideRelativeModeWithoutAppending(MaterialLinkMode mode, string uri)
+    {
+        var archive = ArchiveWithPrefix();
+
+        Assert.Throws<ArgumentException>(() => FModelMaterialLinkWriter.Write(archive, mode, LinksWithTextureUri(uri)));
+
+        AssertPrefixUnchanged(archive);
+    }
+
+    [Fact]
+    public void RelativeTextureUri_AllowsMultipleLeadingParentSegments()
+    {
+        var archive = new FArchiveWriter();
+
+        FModelMaterialLinkWriter.Write(archive, MaterialLinkMode.Relative, LinksWithTextureUri("../../Textures/T_Body.png"));
+
+        Assert.NotEmpty(archive.GetBuffer());
+    }
+
+    [Fact]
     public void DuplicateSlotIndexes_ThrowWithoutAppending()
     {
         var archive = ArchiveWithPrefix();
         var links = Links();
         links.Slots.Add(links.Slots[0]);
+
+        Assert.Throws<ArgumentException>(() => FModelMaterialLinkWriter.Write(archive, MaterialLinkMode.Relative, links));
+
+        AssertPrefixUnchanged(archive);
+    }
+
+    [Fact]
+    public void DuplicateSourceMaterialIndexes_AreAllowedForSharedSourceMaterials()
+    {
+        var archive = ArchiveWithPrefix();
+        var links = Links();
+        links.WriteSourceMaterialIndices = true;
+        links.Slots[0].SourceMaterialIndex = 1;
+        links.Slots.Add(new FModelMaterialSlot { SlotIndex = 5, SourceMaterialIndex = 1, MaterialJsonUri = "materials/other.json" });
+
+        FModelMaterialLinkWriter.Write(archive, MaterialLinkMode.Relative, links);
+        Assert.NotEmpty(archive.GetBuffer());
+    }
+
+    [Fact]
+    public void MaterialsV2_WritesAbsentSourceMappingAsNegativeSentinel()
+    {
+        var archive = new FArchiveWriter();
+        var links = Links();
+        links.WriteSourceMaterialIndices = true;
+        links.Slots[0].SourceMaterialIndex = null;
+
+        FModelMaterialLinkWriter.Write(archive, MaterialLinkMode.Relative, links);
+
+        var payload = ReadChunk(archive.GetBuffer(), out _, out _);
+        Assert.Equal((byte) 2, payload[0]);
+        Assert.Equal(-1, BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(1 + sizeof(int) + sizeof(int))));
+    }
+
+    [Fact]
+    public void NegativeSourceMaterialIndex_ThrowsWithoutAppending()
+    {
+        var archive = ArchiveWithPrefix();
+        var links = Links();
+        links.Slots[0].SourceMaterialIndex = -1;
 
         Assert.Throws<ArgumentException>(() => FModelMaterialLinkWriter.Write(archive, MaterialLinkMode.Relative, links));
 
@@ -466,6 +581,34 @@ public class FModelMaterialLinkWriterTests
             }
         ]
     };
+
+    private static FModelMaterialLinks LinksWithTextureUri(string uri)
+    {
+        var links = Links();
+        var texture = links.Slots[0].Parameters[0].TextureValue!;
+        links.Slots[0] = new FModelMaterialSlot
+        {
+            SlotIndex = links.Slots[0].SlotIndex,
+            SlotName = links.Slots[0].SlotName,
+            UnrealMaterialPath = links.Slots[0].UnrealMaterialPath,
+            MaterialJsonUri = links.Slots[0].MaterialJsonUri,
+            Parameters =
+            [
+                FModelMaterialParameter.Texture("BaseColor", "base_color", new FModelTextureReference
+                {
+                    UnrealObjectPath = texture.UnrealObjectPath,
+                    Uri = uri,
+                    Mime = texture.Mime,
+                    ImageBytes = texture.ImageBytes,
+                    ColorSpace = texture.ColorSpace,
+                    Packing = texture.Packing,
+                    UvSet = texture.UvSet
+                }),
+                .. links.Slots[0].Parameters.Skip(1)
+            ]
+        };
+        return links;
+    }
 
     private static FArchiveWriter ArchiveWithPrefix()
     {
@@ -584,6 +727,22 @@ public class FModelMaterialLinkWriterTests
         for (var index = 0; index < 3; index++)
             offset += sizeof(int) + BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset));
         return BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset));
+    }
+
+    private static (int SlotIndex, int SourceMaterialIndex) ReadMaterialSlotIndexes(byte[] payload, int slotOrdinal)
+    {
+        var offset = 1 + sizeof(int);
+        for (var index = 0; index < slotOrdinal; index++)
+        {
+            offset += sizeof(int) * 2;
+            foreach (var _ in new[] { "Section0", "/Game/Materials/M_Section0.M_Section0", "materials/section0.json" })
+                offset += sizeof(int) + Encoding.UTF8.GetByteCount(_);
+            offset += sizeof(int);
+        }
+
+        return (
+            BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset)),
+            BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(offset + sizeof(int))));
     }
 
     private static int LocationModeOffset(byte[] payload)

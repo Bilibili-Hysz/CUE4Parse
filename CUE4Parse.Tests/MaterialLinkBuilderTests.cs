@@ -6,6 +6,23 @@ namespace CUE4Parse.Tests;
 
 public class MaterialLinkBuilderTests
 {
+    [Theory]
+    [InlineData("/Game/Materials/M.M", "/Game/Materials/M")]
+    [InlineData("Game/Materials/M.M", "/Game/Materials/M")]
+    [InlineData("/Engine/Content/BasicShapes/BasicShapeMaterial.BasicShapeMaterial", "/Engine/Content/BasicShapes/BasicShapeMaterial")]
+    public void NormalizeUnrealMaterialPath_UsesCanonicalPackagePath(string input, string expected)
+    {
+        Assert.Equal(expected, MaterialLinkBuilder.NormalizeUnrealMaterialPath(input));
+    }
+
+    [Fact]
+    public void Build_NormalizesUnrealMaterialPathInModelLinks()
+    {
+        var links = MaterialLinkBuilder.Build(MaterialLinkMode.Relative, "Game/Meshes/Hero.uemodel", "Game/Materials/M.json", "Engine/Content/BasicShapes/BasicShapeMaterial.BasicShapeMaterial", []);
+
+        Assert.Equal("/Engine/Content/BasicShapes/BasicShapeMaterial", Assert.Single(links.Slots).UnrealMaterialPath);
+    }
+
     [Fact]
     public void BuildForMaterialSlots_PreservesOriginalSectionSlotsWhenAMaterialIsMissing()
     {

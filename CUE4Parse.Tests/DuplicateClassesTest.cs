@@ -20,7 +20,9 @@ public class DuplicateClassesTest
 
         //get all assemblies referenced by the entry assembly
         // var assemblies = AppDomain.CurrentDomain.GetAssemblies(); // includes current assembly too
-        var assemblies = Assembly.GetExecutingAssembly().GetReferencedAssemblies().Select(Assembly.Load);
+        var assemblies = Assembly.GetExecutingAssembly().GetReferencedAssemblies()
+            .Where(name => string.Equals(name.Name, "CUE4Parse", StringComparison.Ordinal))
+            .Select(Assembly.Load);
         assemblies = assemblies.Append(Assembly.GetExecutingAssembly());
         Type propertyHolderType = typeof(IPropertyHolder);
 

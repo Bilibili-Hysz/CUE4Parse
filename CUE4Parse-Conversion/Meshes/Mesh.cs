@@ -44,7 +44,19 @@ namespace CUE4Parse_Conversion.Meshes
 
             if (externalResources.Length > 0)
             {
-                var operationFinalPath = FixAndCreatePath(baseDirectory, FileName);
+                string operationFinalPath;
+                Dictionary<ResourceEntry, string> finalResourcePaths;
+                try
+                {
+                    operationFinalPath = FixAndCreatePath(baseDirectory, FileName);
+                    finalResourcePaths = externalResources.ToDictionary(
+                        resource => resource,
+                        resource => FixAndCreatePath(baseDirectory, resource.PhysicalTargetPath));
+                }
+                catch
+                {
+                    return false;
+                }
                 if (!InvalidateModel(operationFinalPath)) return false;
 
                 DirectoryInfo? stagingDirectory = null;
@@ -67,7 +79,7 @@ namespace CUE4Parse_Conversion.Meshes
                             return false;
                         }
 
-                        var finalResourcePath = FixAndCreatePath(baseDirectory, resource.PhysicalTargetPath);
+                        var finalResourcePath = finalResourcePaths[resource];
                         var stagedResourcePath = FixAndCreatePath(stagingDirectory, resource.PhysicalTargetPath);
                         var bytes = resource.Bytes.ToArray();
                         File.WriteAllBytes(stagedResourcePath, bytes);

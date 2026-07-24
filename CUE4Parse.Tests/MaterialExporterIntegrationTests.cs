@@ -14,6 +14,22 @@ namespace CUE4Parse.Tests;
 public class MaterialExporterIntegrationTests
 {
     [Theory]
+    [InlineData("Game/Materials/M_Chair.M_Chair", "/Game/Materials/M_Chair")]
+    [InlineData("Engine/Materials/M_Default.M_Default", "/Engine/Materials/M_Default")]
+    public void BuildMaterialLinks_UsesCanonicalMaterialIdentityAndPreservesUris(string materialPath, string expectedIdentity)
+    {
+        var exporter = CreateMaterialExporter(materialPath, true);
+
+        var links = exporter.BuildMaterialLinks(
+            MaterialLinkMode.Bundle, "Game/Models/Chair.uemodel", 0, "0", Path.GetFullPath("BundleRoot"));
+
+        var slot = Assert.Single(links.Slots);
+        Assert.Equal(expectedIdentity, slot.UnrealMaterialPath);
+        Assert.Equal(materialPath[..^Path.GetExtension(materialPath).Length] + ".json", slot.MaterialJsonUri);
+        Assert.Equal("Game/Textures/T.png", Assert.Single(slot.Parameters).TextureValue!.Uri);
+    }
+
+    [Theory]
     [InlineData(MaterialLinkMode.Relative, "Models/M.uemodel", "Materials/M.M", "../Textures/T.png", "../Materials/M.json")]
     [InlineData(MaterialLinkMode.Bundle, "Game/Models/M.uemodel", "Game/Materials/M.M", "Game/Textures/T.png", "Game/Materials/M.json")]
     public void PopulateManifestThenBuildMaterialLinks_ReusesFinalManifestUris(
@@ -88,6 +104,33 @@ public class MaterialExporterIntegrationTests
             Assert.Single(manifest.Resources, resource => !resource.UnrealObjectPath.StartsWith("material:", StringComparison.Ordinal)).RelativeUri);
     }
 
+    [Fact]
+    public void MaterialPathNormalizationOnlyAffectsSerializedMaterialIdentity()
+    {
+        var policy = new UESceneResourceUriPolicy(UESceneResourceLogicalRoot.GameExportTree);
+        var options = new CUE4Parse_Conversion.ExporterOptions
+        {
+            MaterialFormat = EMaterialFormat.AllLayers,
+            TextureFormat = ETextureFormat.Png,
+            UESceneResourceUriPolicy = policy
+        };
+        const string rawMaterialPath = "Game/Materials/M_Chair.M_Chair";
+        var exporter = CreateMaterialExporter(rawMaterialPath, true, options);
+        var manifest = new ResourceManifest();
+
+        exporter.PopulateManifest(manifest, MaterialLinkMode.Bundle, "Game/Models/Chair.uemodel", Path.GetFullPath("BundleRoot"));
+        manifest.Seal();
+        var links = exporter.BuildMaterialLinks(MaterialLinkMode.Bundle, "Game/Models/Chair.uemodel", 0, "0", Path.GetFullPath("BundleRoot"), manifest);
+
+        var material = Assert.Single(manifest.Resources, resource => resource.UnrealObjectPath == "material:" + rawMaterialPath);
+        var expectedMaterialUri = policy.Allocate(rawMaterialPath, UESceneResourceKind.Material, ".json");
+        Assert.Equal(expectedMaterialUri, material.RelativeUri);
+        Assert.Equal(expectedMaterialUri, material.PhysicalTargetPath);
+        Assert.Equal(material.RelativeUri, Assert.Single(links.Slots).MaterialJsonUri);
+        Assert.Equal("/Game/Materials/M_Chair", Assert.Single(links.Slots).UnrealMaterialPath);
+        Assert.Contains(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawMaterialPath))).ToLowerInvariant(), material.RelativeUri);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -98,6 +141,20 @@ public class MaterialExporterIntegrationTests
 
         Assert.Throws<ArgumentException>(() => exporter.BuildMaterialLinks(
             MaterialLinkMode.Bundle, "Game/Models/M.uemodel", 0, bundleRoot: bundleRoot));
+    }
+
+    [Fact]
+    public void TryWriteToDir_ReparsePointTargetReturnsFalseWithoutWriting()
+    {
+        using var tempDir = new TemporaryDirectory();
+        var textures = Path.Combine(tempDir.Directory.FullName, "Textures");
+        Directory.CreateDirectory(textures);
+        var exporter = CreateMaterialExporter("Textures/M.M", false);
+        exporter.PathAttributes = path => path == textures ? FileAttributes.Directory | FileAttributes.ReparsePoint : null;
+
+        Assert.False(exporter.TryWriteToDir(tempDir.Directory, out _, out _));
+        Assert.False(File.Exists(Path.Combine(textures, "M.json")));
+        Assert.False(File.Exists(Path.Combine(textures, "T.png")));
     }
 
     private static MaterialExporter2 CreateMaterialExporter(string materialPath, bool bundle, CUE4Parse_Conversion.ExporterOptions? options = null)
@@ -128,5 +185,11 @@ public class MaterialExporterIntegrationTests
         {
             parameters.Textures["BaseColor"] = _texture;
         }
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public DirectoryInfo Directory { get; } = System.IO.Directory.CreateTempSubdirectory();
+        public void Dispose() => Directory.Delete(true);
     }
 }
