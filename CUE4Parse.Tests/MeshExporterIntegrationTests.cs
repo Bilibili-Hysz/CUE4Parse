@@ -70,7 +70,7 @@ public class MeshExporterIntegrationTests
     [Fact]
     public void UeFormatAllLods_RejectsDivergentMaterialTopology()
     {
-        var error = Assert.Throws<InvalidDataException>(() => MeshExporter.ValidateUeFormatMaterialTopology([
+        var error = Assert.Throws<UeFormatMaterialTopologyException>(() => MeshExporter.ValidateUeFormatMaterialTopology([
             (0u, (IReadOnlyList<(int SourceMaterialIndex, int SectionIndex)>)[(0, 0), (1, 1)]),
             (1u, (IReadOnlyList<(int SourceMaterialIndex, int SectionIndex)>)[(0, 0), (2, 1)])
         ]));
@@ -82,7 +82,7 @@ public class MeshExporterIntegrationTests
     [Fact]
     public void UeFormatAllLods_RejectsDifferentSectionCount()
     {
-        var error = Assert.Throws<InvalidDataException>(() => MeshExporter.ValidateUeFormatMaterialTopology([
+        var error = Assert.Throws<UeFormatMaterialTopologyException>(() => MeshExporter.ValidateUeFormatMaterialTopology([
             (0u, (IReadOnlyList<(int SourceMaterialIndex, int SectionIndex)>)[(0, 0), (1, 1)]),
             (1u, (IReadOnlyList<(int SourceMaterialIndex, int SectionIndex)>)[(0, 0)])
         ]));
@@ -114,7 +114,7 @@ public class MeshExporterIntegrationTests
         Assert.Equal([2u, 5u], included.Select(entry => entry.SourceLodIndex));
 
         second.Sections = new Lazy<CMeshSection[]>(() => [new CMeshSection(2, 0, 1, null, null)]);
-        var error = Assert.Throws<InvalidDataException>(() => MeshExporter.PrepareUeFormatLods([
+        var error = Assert.Throws<UeFormatMaterialTopologyException>(() => MeshExporter.PrepareUeFormatLods([
             (Lod: (CBaseMeshLod) first, SourceLodIndex: 2u),
             (Lod: (CBaseMeshLod) second, SourceLodIndex: 5u)
         ], ELodFormat.AllLods));

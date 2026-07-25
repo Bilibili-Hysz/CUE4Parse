@@ -594,7 +594,7 @@ public static class UESceneReader
             var reserved = BinaryPrimitives.ReadUInt32LittleEndian(r[36..]);
             if (severity is < 1 or > 3) throw new InvalidDataException("Diagnostic severity out of range.");
             if (subjectKind > 6) throw new InvalidDataException("Diagnostic subject_kind out of range.");
-            if (code is < 1 or > 10) throw new InvalidDataException("Diagnostic code out of range.");
+            if (code is < 1 or > 11) throw new InvalidDataException("Diagnostic code out of range.");
             if ((flags & ~1u) != 0) throw new InvalidDataException("DIAG flags only bit0 allowed.");
             if (reserved != 0) throw new InvalidDataException("DIAG reserved nonzero.");
             if (subjectKind == 0 && subjectId != 0) throw new InvalidDataException("Scene diagnostic has nonzero subject_id.");

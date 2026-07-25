@@ -343,7 +343,7 @@ namespace CUE4Parse_Conversion.Meshes
             for (var index = 1; index < lods.Count; index++)
             {
                 if (!baseline.SequenceEqual(lods[index].Topology))
-                    throw new InvalidDataException($"LOD {lods[index].SourceLodIndex} material topology differs from LOD {lods[0].SourceLodIndex}; UEScene V1 requires one model-wide material-link table.");
+                    throw new UeFormatMaterialTopologyException(lods[0].SourceLodIndex, lods[index].SourceLodIndex);
             }
         }
 
@@ -355,7 +355,7 @@ namespace CUE4Parse_Conversion.Meshes
                 ValidateUeFormatMaterialTopology(included.Select(entry =>
                     (entry.SourceLodIndex, entry.Lod.GetSectionMaterialIndices())).ToList());
             return included;
-        }
+    }
 
         internal static void ValidateUeFormatBundleConfiguration(ExporterOptions options)
         {
@@ -409,4 +409,11 @@ namespace CUE4Parse_Conversion.Meshes
             throw new NotImplementedException();
         }
     }
+}
+
+public sealed class UeFormatMaterialTopologyException(uint baselineLodIndex, uint conflictingLodIndex)
+    : Exception($"LOD {conflictingLodIndex} material topology differs from LOD {baselineLodIndex}; UEScene V1 requires one model-wide material-link table.")
+{
+    public uint BaselineLodIndex { get; } = baselineLodIndex;
+    public uint ConflictingLodIndex { get; } = conflictingLodIndex;
 }

@@ -303,6 +303,9 @@ public sealed class UESceneBundleExporter
         var components = (document.Components ?? []).ToList();
         var overrides = (document.MaterialOverrides ?? []).ToList();
         var diagnostics = (document.Diagnostics ?? []).ToList();
+        foreach (var producedDiagnostic in producedResources.Values.SelectMany(resource => resource.ExportDiagnostics))
+            diagnostics.Add(new(producedDiagnostic.Severity, producedDiagnostic.SubjectKind, producedDiagnostic.Code, 0, 0,
+                producedDiagnostic.SourceObjectPath, producedDiagnostic.Message, 0, 0, 0));
         var entries = document.BundleEntries ?? [];
         var assetsById = assets.ToDictionary(asset => asset.AssetId);
         var unlinkedOverrides = new HashSet<int>();
@@ -336,7 +339,7 @@ public sealed class UESceneBundleExporter
                     0, 0, 0));
             }
         }
-        if (unlinkedOverrides.Count == 0) return document;
+        if (unlinkedOverrides.Count == 0) return document with { Diagnostics = diagnostics };
 
         overrides = overrides.Where((_, index) => !unlinkedOverrides.Contains(index)).ToList();
         for (var index = 0; index < components.Count; index++)
@@ -1004,15 +1007,19 @@ public sealed record UEScenePublicationDestination(string ScenePhysicalPath, str
     UESceneResourceLogicalRoot ResourceLogicalRoot,
     UESceneResourcePublicationPolicy ResourcePublicationPolicy = UESceneResourcePublicationPolicy.Overwrite);
 public sealed record UESceneProducedResource(string LogicalUri, byte[] Bytes, IReadOnlyList<UESceneProducedLod> Lods, IReadOnlyList<UESceneProducedSidecar> Sidecars,
-    IReadOnlyList<UESceneProducedMaterialSlot>? MaterialSlotMappings = null)
+    IReadOnlyList<UESceneProducedMaterialSlot>? MaterialSlotMappings = null,
+    IReadOnlyList<UESceneProducedDiagnostic>? Diagnostics = null)
 {
     public IReadOnlyList<UESceneProducedMaterialSlot> MaterialSlots => MaterialSlotMappings ?? [];
+    public IReadOnlyList<UESceneProducedDiagnostic> ExportDiagnostics => Diagnostics ?? [];
     public static UESceneProducedResource FromMeshExport(string logicalUri, byte[] bytes, IEnumerable<UESceneProducedLod> lods, IEnumerable<UESceneProducedSidecar>? sidecars = null,
-        IEnumerable<UESceneProducedMaterialSlot>? materialSlots = null) => new(logicalUri, bytes, lods.ToArray(), (sidecars ?? []).ToArray(), materialSlots?.ToArray());
+        IEnumerable<UESceneProducedMaterialSlot>? materialSlots = null, IEnumerable<UESceneProducedDiagnostic>? diagnostics = null) =>
+        new(logicalUri, bytes, lods.ToArray(), (sidecars ?? []).ToArray(), materialSlots?.ToArray(), diagnostics?.ToArray());
     public static UESceneProducedResource FromMeshExporterLods(string meshFileName, byte[] bytes, IEnumerable<(uint SourceLodIndex, float SourceScreenSize)> declaredLods, IEnumerable<UESceneProducedSidecar>? sidecars = null) =>
         new(meshFileName, bytes, declaredLods.Select(lod => new UESceneProducedLod(lod.SourceLodIndex, lod.SourceScreenSize)).ToArray(), (sidecars ?? []).ToArray());
 }
 public sealed record UESceneProducedMaterialSlot(uint SourceMaterialIndex, uint SectionIndex, string EffectiveMaterialPath);
+public sealed record UESceneProducedDiagnostic(byte Severity, byte SubjectKind, ushort Code, string SourceObjectPath, string Message);
 public sealed record UESceneProducedSidecar(string CanonicalUnrealPath, BundleResourceKind Kind, string LogicalUri, string Mime, byte[] Bytes);
 public sealed record UESceneFinalResource(byte ResourceKind, ulong OwnerAssetId, string LogicalUri, string Mime, byte[] Bytes);
 public sealed record UESceneFinalBundlePlan(UESceneDocument Document, IReadOnlyList<UESceneFinalResource> Resources);
@@ -1055,4 +1062,4 @@ public sealed record SceneExportResult(
 {
     public IReadOnlyList<SceneExportError> RecoveryErrors => StructuredRecoveryErrors ?? [];
 }
-public static class UESceneDiagnosticCodes { public const ushort StreamingLevels = 1, WorldPartition = 2, MissingMesh = 3, UnsupportedComponent = 4, UnsupportedParent = 5, UnsupportedSocket = 6, InvalidInstanceTransform = 7, MissingMaterialSidecar = 8, UnsupportedLight = 9, MaterialOverrideMismatch = 10; }
+public static class UESceneDiagnosticCodes { public const ushort StreamingLevels = 1, WorldPartition = 2, MissingMesh = 3, UnsupportedComponent = 4, UnsupportedParent = 5, UnsupportedSocket = 6, InvalidInstanceTransform = 7, MissingMaterialSidecar = 8, UnsupportedLight = 9, MaterialOverrideMismatch = 10, LodMaterialTopologyFallback = 11; }

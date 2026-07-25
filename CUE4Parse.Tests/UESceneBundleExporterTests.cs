@@ -11,6 +11,25 @@ namespace CUE4Parse.Tests;
 public class UESceneBundleExporterTests
 {
     [Fact]
+    public void TryWriteToDirPublishesProducedResourceDiagnostics()
+    {
+        using var temp = new TestDirectory();
+        var plan = UESceneBundleExporter.BuildPlan(World(
+            Actor("/Game/Map.Map:PersistentLevel.A", Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair"))));
+        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
+            resource.LogicalUri, [1], [new(0)], diagnostics:
+            [new(2, 0, UESceneDiagnosticCodes.LodMaterialTopologyFallback, "/Game/Meshes/Chair",
+                "Material topology differed across LODs; exported this model as LOD0 only.")]));
+
+        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        var diagnostic = Assert.Single(result.FinalDocument!.Diagnostics!, item => item.Code == UESceneDiagnosticCodes.LodMaterialTopologyFallback);
+        Assert.Equal("/Game/Meshes/Chair", diagnostic.SourceObjectPath);
+        Assert.Contains("LOD0", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TryWriteToDirPublishesDeduplicatedModelAndFinalBndxHash()
     {
         using var temp = new TestDirectory();
@@ -610,6 +629,29 @@ public class UESceneBundleExporterTests
         Assert.Contains("source slot 0", diagnostic.Message);
         Assert.Contains("/Game/Materials/M_Declared", diagnostic.Message);
         Assert.Contains("/Game/Materials/M_Produced", diagnostic.Message);
+    }
+
+    [Fact]
+    public void TryWriteToDirRetainsProducedDiagnosticsWhenReconcilingMaterialOverrides()
+    {
+        using var temp = new TestDirectory();
+        var component = Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair") with
+        {
+            OverrideMaterialPaths = ["/Game/Materials/M_Declared"]
+        };
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", component)));
+        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
+            resource.LogicalUri, [1], [new(0)],
+            [new("material:/Game/Materials/M_Produced", BundleResourceKind.MaterialJson, "Materials/M_Produced.json", "application/json", [4])],
+            [new(0, 0, "/Game/Materials/M_Produced")],
+            [new(2, 0, UESceneDiagnosticCodes.LodMaterialTopologyFallback, "/Game/Meshes/Chair", "Exported this model as LOD0 only.")]));
+
+        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
+        Assert.Contains(scene.Diagnostics!, diagnostic => diagnostic.Code == UESceneDiagnosticCodes.LodMaterialTopologyFallback);
+        Assert.Contains(scene.Diagnostics!, diagnostic => diagnostic.Code == UESceneDiagnosticCodes.MaterialOverrideMismatch);
     }
 
     [Fact]

@@ -743,7 +743,7 @@ public static class UESceneWriter
         {
             if (d.Severity is < 1 or > 3) throw new InvalidDataException($"Diagnostic severity {d.Severity} out of range.");
             if (d.SubjectKind > 6) throw new InvalidDataException($"Diagnostic subject_kind {d.SubjectKind} out of range.");
-            if (d.Code is < 1 or > 10) throw new InvalidDataException($"Diagnostic code {d.Code} out of range.");
+            if (d.Code is < 1 or > 11) throw new InvalidDataException($"Diagnostic code {d.Code} out of range.");
             if ((d.Flags & ~1u) != 0) throw new InvalidDataException("DIAG flags only bit0 allowed.");
             if (d.Reserved != 0) throw new InvalidDataException("DIAG reserved must be zero.");
             if (d.SubjectKind == 0 && d.SubjectId != 0) throw new InvalidDataException("Scene diagnostic has nonzero subject_id.");
