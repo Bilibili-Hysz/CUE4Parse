@@ -38,6 +38,22 @@ public static class FModelSkeletonExtensionWriter
         archive.Write(extensionArchive.GetBuffer());
     }
 
+    public static void WriteTargetPose(FArchiveWriter archive, string sourcePosePath, FModelSkeletonIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(archive);
+        ArgumentException.ThrowIfNullOrEmpty(sourcePosePath);
+        ArgumentNullException.ThrowIfNull(identity);
+        using var extensionArchive = new FArchiveWriter();
+        using (var chunk = new FDataChunk("FMODEL_TARGET_SKELETON", 1))
+        {
+            chunk.Write(ExtensionVersion);
+            chunk.WriteFString(sourcePosePath);
+            WriteIdentity(chunk, identity);
+            chunk.Serialize(extensionArchive);
+        }
+        archive.Write(extensionArchive.GetBuffer());
+    }
+
     private static void WriteIdentity(FArchiveWriter archive, FModelSkeletonIdentity identity)
     {
         archive.WriteFString(identity.SkeletonPath);

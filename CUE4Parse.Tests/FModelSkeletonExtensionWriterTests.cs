@@ -65,6 +65,27 @@ public class FModelSkeletonExtensionWriterTests
     }
 
     [Fact]
+    public void WritesTargetPoseWithSourcePosePathAndSharedIdentityLayout()
+    {
+        var identity = Identity();
+        using var archive = new FArchiveWriter();
+
+        FModelSkeletonExtensionWriter.WriteTargetPose(archive, "/Game/Poses/P_Pose.P_Pose", identity);
+
+        var chunk = ReadChunks(archive.GetBuffer()).Single();
+        Assert.Equal("FMODEL_TARGET_SKELETON", chunk.Name);
+        Assert.Equal(1, chunk.Count);
+        using var reader = new BinaryReader(new MemoryStream(chunk.Payload), Encoding.UTF8);
+        Assert.Equal((byte) 1, reader.ReadByte());
+        Assert.Equal("/Game/Poses/P_Pose.P_Pose", ReadFString(reader));
+        Assert.Equal(identity.SkeletonPath, ReadFString(reader));
+        Assert.Equal((byte) 1, reader.ReadByte());
+        Assert.Equal(identity.SkeletonGuid!.Value.AsByteSpan().ToArray(), reader.ReadBytes(FGuid.Size));
+        Assert.Equal(identity.BoneLayoutHash, reader.ReadBytes(32));
+        Assert.Equal(reader.BaseStream.Length, reader.BaseStream.Position);
+    }
+
+    [Fact]
     public void WritesMissingGuidMarkerWithoutGuidBytes()
     {
         var identity = new FModelSkeletonIdentity("/Game/SK_Hero.SK_Hero", null, Enumerable.Repeat((byte) 0x5a, 32).ToArray());

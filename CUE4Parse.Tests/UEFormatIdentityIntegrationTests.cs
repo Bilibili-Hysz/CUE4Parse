@@ -14,6 +14,8 @@ using CUE4Parse_Conversion.Animations.PSA;
 using CUE4Parse_Conversion.Animations.UEFormat;
 using CUE4Parse_Conversion.Meshes.PSK;
 using CUE4Parse_Conversion.Meshes.UEFormat;
+using CUE4Parse_Conversion.PoseAsset.Conversion;
+using CUE4Parse_Conversion.PoseAsset.UEFormat;
 using CUE4Parse_Conversion.UEFormat.Structs;
 
 namespace CUE4Parse.Tests;
@@ -62,6 +64,44 @@ public class UEFormatIdentityIntegrationTests
             chunk => Assert.Equal("FMODEL_TARGET_SKELETON", chunk.Name));
         Assert.Equal(1, chunks.Count(chunk => chunk.Name == "FMODEL_TARGET_SKELETON"));
         Assert.Equal(sourcePath, ReadTargetSourcePath(chunks[^1].Payload));
+        Assert.Equal(IdentitySkeleton().GetPathName(), ReadTargetSkeletonPath(chunks[^1].Payload));
+    }
+
+    [Fact]
+    public void UEPose_WritesStandardChunksThenOneTargetSkeletonWithExplicitSourcePath()
+    {
+        var poseAsset = new CPoseAsset
+        {
+            CurveNames = ["Smile"],
+            Poses =
+            [
+                new CPoseData
+                {
+                    PoseName = "Pose",
+                    CurveData = [0.5f],
+                    Keys =
+                    [
+                        new CPoseKey(
+                            "root",
+                            new CUE4Parse.UE4.Objects.Core.Math.FVector(0, 0, 0),
+                            new CUE4Parse.UE4.Objects.Core.Math.FQuat(0, 0, 0, 1),
+                            new CUE4Parse.UE4.Objects.Core.Math.FVector(1, 1, 1))
+                    ]
+                }
+            ]
+        };
+        using var archive = new FArchiveWriter();
+
+        new UEPose(
+            "P_Pose",
+            poseAsset,
+            "/Game/Hero/P_Pose.P_Pose",
+            FModelSkeletonIdentity.FromSkeleton(IdentitySkeleton()),
+            new ExporterOptions()).Save(archive);
+
+        var chunks = ReadTopLevelChunks(archive.GetBuffer());
+        Assert.Equal(["POSES", "CURVES", "FMODEL_TARGET_SKELETON"], chunks.Select(chunk => chunk.Name));
+        Assert.Equal("/Game/Hero/P_Pose.P_Pose", ReadTargetSourcePath(chunks[^1].Payload));
         Assert.Equal(IdentitySkeleton().GetPathName(), ReadTargetSkeletonPath(chunks[^1].Payload));
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CUE4Parse_Conversion.PoseAsset.Conversion;
+using CUE4Parse_Conversion.Animations.UEFormat;
 using CUE4Parse_Conversion.UEFormat;
 using CUE4Parse_Conversion.UEFormat.Structs;
 using CUE4Parse.UE4.Objects.Engine.Animation;
@@ -11,7 +12,7 @@ public class UEPose : UEFormatExport
 {
     protected override string Identifier { get; set; } = "UEPOSE";
     
-    public UEPose(string name, CPoseAsset poseAsset, ExporterOptions options) : base(name, options)
+    public UEPose(string name, CPoseAsset poseAsset, string sourcePosePath, FModelSkeletonIdentity targetSkeleton, ExporterOptions options) : base(name, options)
     {
         using (var posesChunk = new FDataChunk("POSES", poseAsset.Poses.Count))
         {
@@ -54,5 +55,7 @@ public class UEPose : UEFormatExport
             }
             curvesChunk.Serialize(Ar);
         }
+
+        FModelSkeletonExtensionWriter.WriteTargetPose(Ar, sourcePosePath, targetSkeleton);
     }
 }
