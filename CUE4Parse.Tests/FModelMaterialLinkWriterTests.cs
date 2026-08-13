@@ -419,6 +419,29 @@ public class FModelMaterialLinkWriterTests
         AssertPrefixUnchanged(archive);
     }
 
+    [Theory]
+    [InlineData("../..")]
+    [InlineData("../../..")]
+    [InlineData("textures/body:alternate.png")]
+    [InlineData("textures/\tbody.png")]
+    public void LogicalUris_RejectNonResourceParentOnlyAndSchemeLikeValues(string uri)
+    {
+        var archive = ArchiveWithPrefix();
+        var links = Links();
+        links.Slots[0] = new FModelMaterialSlot
+        {
+            SlotIndex = 4,
+            SlotName = "Body",
+            UnrealMaterialPath = "/Game/Materials/M_Body.M_Body",
+            MaterialJsonUri = uri,
+            Parameters = links.Slots[0].Parameters
+        };
+
+        Assert.Throws<ArgumentException>(() => FModelMaterialLinkWriter.Write(archive, MaterialLinkMode.Relative, links));
+
+        AssertPrefixUnchanged(archive);
+    }
+
     [Fact]
     public void RelativeTextureUri_AllowsMultipleLeadingParentSegments()
     {

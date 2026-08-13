@@ -18,7 +18,9 @@ public class PoseAsset : ExporterBase
         if (FileData.Length <= 0) return false;
 
         savedFilePath = FixAndCreatePath(baseDirectory, FileName);
-        File.WriteAllBytesAsync(savedFilePath, FileData);
+        // Keep the directory exporter synchronous: FModel consumes the return value
+        // immediately and must not race an outstanding asynchronous write.
+        File.WriteAllBytes(savedFilePath, FileData);
         label = Path.GetFileName(savedFilePath);
         return File.Exists(savedFilePath);
     }

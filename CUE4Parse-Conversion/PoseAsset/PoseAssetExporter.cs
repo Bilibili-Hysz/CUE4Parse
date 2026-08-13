@@ -9,7 +9,7 @@ namespace CUE4Parse_Conversion.PoseAsset;
 public class PoseAssetExporter : ExporterBase
 {
     
-    public PoseAsset PoseAsset;
+    public PoseAsset? PoseAsset { get; private set; }
 
     public PoseAssetExporter(UPoseAsset poseAsset, ExporterOptions options) : base(poseAsset, options)
     {
@@ -40,7 +40,14 @@ public class PoseAssetExporter : ExporterBase
 
     public override bool TryWriteToDir(DirectoryInfo baseDirectory, out string label, out string savedFilePath)
     {
-        throw new NotImplementedException();
+        if (PoseAsset is null)
+        {
+            label = string.Empty;
+            savedFilePath = string.Empty;
+            return false;
+        }
+
+        return PoseAsset.TryWriteToDir(baseDirectory, out label, out savedFilePath);
     }
 
     public override bool TryWriteToZip(out byte[] zipFile)

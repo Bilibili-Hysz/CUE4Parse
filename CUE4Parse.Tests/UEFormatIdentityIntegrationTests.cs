@@ -176,6 +176,29 @@ public class UEFormatIdentityIntegrationTests
     }
 
     [Fact]
+    public void UEModel_ModelIdentityUsesTheSerializedSkeletonBoneLayout()
+    {
+        var skeleton = IdentitySkeleton();
+        var serializedBones = new List<CSkelMeshBone>
+        {
+            new() { Name = new FName("root"), ParentIndex = -1 },
+            new() { Name = new FName("mesh_extra"), ParentIndex = 0 }
+        };
+        using var archive = new FArchiveWriter();
+
+        new UEModel("SK_Hero", skeleton, serializedBones, [], [], new ExporterOptions()).Save(archive);
+
+        var identityChunk = Assert.Single(ReadTopLevelChunks(archive.GetBuffer())
+            .Where(chunk => chunk.Name == "FMODEL_SKELETON_IDENTITY"));
+        var actual = ReadModelSkeletonLayoutHash(identityChunk.Payload);
+        var expected = FModelSkeletonIdentity.ComputeLayoutHash(
+            serializedBones.Select(bone => (bone.Name.Text, bone.ParentIndex)));
+
+        Assert.Equal(expected, actual);
+        Assert.False(FModelSkeletonIdentity.FromSkeleton(skeleton).BoneLayoutHash.SequenceEqual(actual));
+    }
+
+    [Fact]
     public void UEModel_UnresolvedSkeletonFailsBeforePublishingAnyOutput()
     {
         var package = new SkeletonPackage();
@@ -299,6 +322,18 @@ public class UEFormatIdentityIntegrationTests
         reader.ReadByte();
         ReadFString(reader);
         return ReadFString(reader);
+    }
+
+    private static byte[] ReadModelSkeletonLayoutHash(byte[] payload)
+    {
+        using var reader = new BinaryReader(new MemoryStream(payload), Encoding.UTF8);
+        reader.ReadByte();
+        ReadFString(reader);
+        if (reader.ReadByte() == 1)
+            reader.ReadBytes(FGuid.Size);
+        var layoutHash = reader.ReadBytes(32);
+        Assert.Equal(reader.BaseStream.Length, reader.BaseStream.Position);
+        return layoutHash;
     }
 
     private static string ReadFString(BinaryReader reader) => Encoding.UTF8.GetString(reader.ReadBytes(reader.ReadInt32()));

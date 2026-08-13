@@ -102,6 +102,8 @@ public sealed class FModelTextureReference
 
 public static class FModelMaterialLinkWriter
 {
+    private const byte PbrInterfacesVersion = 2;
+
     private const byte ExtensionVersion = 1;
     private const byte SourceIndexExtensionVersion = 2;
 
@@ -161,7 +163,7 @@ public static class FModelMaterialLinkWriter
     {
         if (links.PbrInterfaces.Count == 0) return;
         using var interfacesChunk = new FDataChunk("FMODEL_PBR_INTERFACES", links.PbrInterfaces.Count);
-        interfacesChunk.Write((byte) 2);
+        interfacesChunk.Write(PbrInterfacesVersion);
         interfacesChunk.Write(links.PbrInterfaces.Count);
         foreach (var role in links.PbrInterfaces)
         {
@@ -216,22 +218,8 @@ public static class FModelMaterialLinkWriter
         }
     }
 
-    private static void ValidateLogicalUri(string value, string parameterName, MaterialLinkMode mode)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.IndexOf('\0') >= 0 || value.IndexOf('\\') >= 0 || value[0] == '/' || IsDrivePath(value))
-            throw new ArgumentException("Logical URI must be a non-rooted slash-separated path.", parameterName);
-
-        if (value.Split('/').Any(segment => segment is "" or "."))
-            throw new ArgumentException("Logical URI contains an empty or traversal segment.", parameterName);
-        var segments = value.Split('/');
-        if (mode == MaterialLinkMode.Relative && segments.SkipWhile(segment => segment == "..").All(segment => segment != ".."))
-            return;
-        if (segments.Any(segment => segment == ".."))
-            throw new ArgumentException("Bundle URI contains a traversal segment.", parameterName);
-    }
-
-
-    private static bool IsDrivePath(string value) => value.Length >= 2 && char.IsAsciiLetter(value[0]) && value[1] == ':';
+    private static void ValidateLogicalUri(string value, string parameterName, MaterialLinkMode mode) =>
+        RelativeResourceUri.NormalizeResourceUri(value, mode == MaterialLinkMode.Relative, parameterName);
 
     private static void WriteParameter(FArchiveWriter archive, FModelMaterialParameter parameter, MaterialLinkMode mode, List<EmbeddedTexture> textures)
     {

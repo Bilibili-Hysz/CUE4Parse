@@ -281,6 +281,23 @@ public class MaterialLinkBuilderTests
         Assert.Throws<ArgumentException>(() => MaterialLinkBuilder.Build(MaterialLinkMode.Bundle, "Game/Meshes/Hero.uemodel", "../escape.json", "/Game/M.M", [parameter], "Game"));
     }
 
+    [Fact]
+    public void RelativeUrisUseOwnerDirectoryAcrossProjectSpecificExportRoots()
+    {
+        Assert.Equal(
+            "../Texture/T_Hero.png",
+            MaterialLinkBuilder.BuildUri(
+                MaterialLinkMode.Relative,
+                "CodeWorld/Content/Characters/Hero/Model/Hero.uemodel",
+                "CodeWorld/Content/Characters/Hero/Texture/T_Hero.png",
+                null));
+        Assert.Throws<ArgumentException>(() => MaterialLinkBuilder.BuildUri(
+            MaterialLinkMode.Relative,
+            "CodeWorld/Content/Characters/Hero/Model/Hero.uemodel",
+            "CodeWorld/Content/Characters/Hero/Texture/T_Hero:alternate.png",
+            null));
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

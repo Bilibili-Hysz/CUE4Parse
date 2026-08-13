@@ -90,7 +90,7 @@ public class UESceneBundleExporterTests
     }
 
     [Fact]
-    public void TryWriteToDestinationPublishesSelfContainedSceneAndResourcesAtAllocatedRoots()
+    public void TryWriteToDestinationPublishesCanonicalSceneAndResourcesAtGameTree()
     {
         using var game = new TestDirectory();
         var destination = UESceneExportDestination.Allocate(game.Directory.FullName, "Content/Maps/City/City.umap");
@@ -108,7 +108,7 @@ public class UESceneBundleExporterTests
     }
 
     [Fact]
-    public void TryWriteToDestinationPublishesSelfContainedSceneAndSidecarsAtAllocatedRoot()
+    public void TryWriteToDestinationPublishesCanonicalSceneAndSidecarsAtGameTree()
     {
         using var game = new TestDirectory();
         var destination = UESceneExportDestination.Allocate(game.Directory.FullName, "Content/Maps/City/City.umap");
@@ -125,7 +125,7 @@ public class UESceneBundleExporterTests
             destination.ResourceLogicalRoot, destination.ResourcePublicationPolicy), CancellationToken.None);
 
         Assert.True(result.Success, result.Error);
-        Assert.Equal(Path.Combine(game.Directory.FullName, "Uescenes", "Content", "Maps", "City", "City", "City.uescene"), result.ScenePath);
+        Assert.Equal(Path.Combine(game.Directory.FullName, "Content", "Maps", "City", "City.umap.uescene"), result.ScenePath);
         Assert.False(File.Exists(Path.Combine(game.Directory.FullName, "Uescenes", "City.uescene")));
         var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
         Assert.Equal(3, result.FinalPlan!.Resources.Count);
@@ -178,22 +178,32 @@ public class UESceneBundleExporterTests
     }
 
     [Fact]
-    public void BuildPlanRejectsSuppliedUriPolicyWithMismatchedLogicalRoot()
+    public void LegacySceneBundleLogicalRootNormalizesToGameExportTree()
     {
         var world = World(Actor("/Game/Map.Map:PersistentLevel.A", Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair")));
 
-        var error = Assert.Throws<InvalidDataException>(() => UESceneBundleExporter.BuildPlan(world,
-            UESceneResourceLogicalRoot.SceneBundle, new CUE4Parse_Conversion.UEScene.ExporterOptions(new UESceneResourceUriPolicy(UESceneResourceLogicalRoot.GameExportTree))));
+        var plan = UESceneBundleExporter.BuildPlan(world,
+            UESceneResourceLogicalRoot.SceneBundle, new CUE4Parse_Conversion.UEScene.ExporterOptions(new UESceneResourceUriPolicy(UESceneResourceLogicalRoot.GameExportTree)));
 
-        Assert.Contains("logical root", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(0ul, plan.Document.Metadata.OptionalFeatures & SceneMetadata.GameExportTreeRootBit);
     }
 
     [Fact]
-    public void TryWriteToDestinationRejectsPlanMetadataRootMismatchBeforeCreatingRoot()
+    public void TryWriteToDestinationRejectsLegacyPlanMetadataBeforeCreatingRoot()
     {
         using var temp = new TestDirectory();
         var root = new DirectoryInfo(Path.Combine(temp.Directory.FullName, "not-created"));
         var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair"))));
+        plan = plan with
+        {
+            Document = plan.Document with
+            {
+                Metadata = plan.Document.Metadata with
+                {
+                    OptionalFeatures = plan.Document.Metadata.OptionalFeatures & ~SceneMetadata.GameExportTreeRootBit
+                }
+            }
+        };
         var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(resource.LogicalUri, [1], [new(0)]));
 
         var result = exporter.TryWriteToDestination(new(Path.Combine(root.FullName, "Map.uescene"), root.FullName,
@@ -224,11 +234,11 @@ public class UESceneBundleExporterTests
     {
         var world = World(Actor("/Game/Map.Map:PersistentLevel.A", Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair")));
 
-        var selfContained = UESceneBundleExporter.BuildPlan(world);
+        var defaultPlan = UESceneBundleExporter.BuildPlan(world);
         var reuse = UESceneBundleExporter.BuildPlan(world, UESceneResourceLogicalRoot.GameExportTree, token: CancellationToken.None);
         var roundTripped = UESceneReader.Read(UESceneWriter.Write(reuse.Document));
 
-        Assert.Equal(0ul, selfContained.Document.Metadata.OptionalFeatures & SceneMetadata.GameExportTreeRootBit);
+        Assert.NotEqual(0ul, defaultPlan.Document.Metadata.OptionalFeatures & SceneMetadata.GameExportTreeRootBit);
         Assert.NotEqual(0ul, reuse.Document.Metadata.OptionalFeatures & SceneMetadata.GameExportTreeRootBit);
         Assert.NotEqual(0ul, roundTripped.Metadata.OptionalFeatures & SceneMetadata.GameExportTreeRootBit);
     }
@@ -314,11 +324,12 @@ public class UESceneBundleExporterTests
     }
 
     [Fact]
-    public void ReusePolicyIgnoresNonContentFixedPathsWhenCanonicalIdentityIsGameAsset()
+    public void ReusePolicyUsesContentRelativeUrisForCustomProjectMounts()
     {
         var policy = new UESceneResourceUriPolicy(UESceneResourceLogicalRoot.GameExportTree);
 
         Assert.Equal("Content/Meshes/Chair.uemodel", policy.Allocate("/Game/Meshes/Chair.Chair", UESceneResourceKind.Model, ".uemodel"));
+        Assert.Equal("Content/Characters/Hero/Lynn.uemodel", policy.Allocate("/CodeWorld/Content/Characters/Hero/Lynn.Lynn", UESceneResourceKind.Model, ".uemodel"));
     }
 
     [Fact]
@@ -544,27 +555,18 @@ public class UESceneBundleExporterTests
     }
 
     [Theory]
-    [InlineData("/Game//M", "/Game//M.M")]
-    [InlineData("/Game/./M", "/Game/./M.M")]
-    [InlineData("/Game/M", "/Game/M..M")]
-    [InlineData("//Game/M", "//Game/M.M")]
-    public void TryWriteToDirTreatsMalformedPackageQualifiedMaterialSlotsAsMismatches(string declaredMaterialPath, string producedMaterialPath)
+    [InlineData("/Game//M")]
+    [InlineData("/Game/./M")]
+    [InlineData("//Game/M")]
+    public void BuildPlanRejectsMalformedPackageQualifiedMaterialSlots(string declaredMaterialPath)
     {
-        using var temp = new TestDirectory();
         var component = Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair") with
         {
             OverrideMaterialPaths = [declaredMaterialPath]
         };
-        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", component)));
-        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
-            resource.LogicalUri, [1], [new(0)], [], [new(0, 0, producedMaterialPath)]));
 
-        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
-
-        Assert.True(result.Success, result.Error);
-        var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
-        Assert.Empty(scene.MaterialOverrides!);
-        Assert.Contains(scene.Diagnostics!, diagnostic => diagnostic.Code == UESceneDiagnosticCodes.MaterialOverrideMismatch);
+        Assert.ThrowsAny<ArgumentException>(() => UESceneBundleExporter.BuildPlan(
+            World(Actor("/Game/Map.Map:PersistentLevel.A", component))));
     }
 
     [Theory]
@@ -574,24 +576,15 @@ public class UESceneBundleExporterTests
     [InlineData("/Game/./M.M")]
     [InlineData("/Game/M..M")]
     [InlineData("//Game/M.M")]
-    [InlineData("/Game/M.Different")]
-    public void TryWriteToDirTreatsIdenticalMalformedMaterialSlotsAsMismatches(string malformedMaterialPath)
+    public void BuildPlanRejectsMalformedMaterialIdentityBeforePublication(string malformedMaterialPath)
     {
-        using var temp = new TestDirectory();
         var component = Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair") with
         {
             OverrideMaterialPaths = [malformedMaterialPath]
         };
-        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", component)));
-        var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(
-            resource.LogicalUri, [1], [new(0)], [], [new(0, 0, malformedMaterialPath)]));
 
-        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
-
-        Assert.True(result.Success, result.Error);
-        var scene = UESceneReader.Read(File.ReadAllBytes(result.ScenePath!));
-        Assert.Empty(scene.MaterialOverrides!);
-        Assert.Contains(scene.Diagnostics!, diagnostic => diagnostic.Code == UESceneDiagnosticCodes.MaterialOverrideMismatch);
+        Assert.ThrowsAny<ArgumentException>(() => UESceneBundleExporter.BuildPlan(
+            World(Actor("/Game/Map.Map:PersistentLevel.A", component))));
     }
 
     [Fact]
@@ -807,7 +800,7 @@ public class UESceneBundleExporterTests
         Assert.Equal([9], File.ReadAllBytes(modelPath));
         Assert.Equal([8], File.ReadAllBytes(materialPath));
         Assert.Equal([7], File.ReadAllBytes(texturePath));
-        Assert.False(File.Exists(Path.Combine(temp.Directory.FullName, "Scenes", "Map.uescene")));
+        Assert.False(File.Exists(Path.Combine(temp.Directory.FullName, "Content", "Map.umap.uescene")));
         Assert.Empty(Directory.GetDirectories(temp.Directory.FullName, ".uescene-stage-*", SearchOption.TopDirectoryOnly));
     }
 
@@ -835,7 +828,7 @@ public class UESceneBundleExporterTests
         Assert.Equal([9], File.ReadAllBytes(materialPath));
         Assert.False(File.Exists(modelPath));
         Assert.False(File.Exists(Path.Combine(temp.Directory.FullName, "Textures", "T_Chair.png")));
-        Assert.False(File.Exists(Path.Combine(temp.Directory.FullName, "Scenes", "Map.uescene")));
+        Assert.False(File.Exists(Path.Combine(temp.Directory.FullName, "Content", "Map.umap.uescene")));
         Assert.Empty(Directory.GetDirectories(temp.Directory.FullName, ".uescene-stage-*", SearchOption.TopDirectoryOnly));
     }
 
@@ -913,8 +906,7 @@ public class UESceneBundleExporterTests
     }
 
     [Theory]
-    [InlineData("Scenes/Map.uescene")]
-    [InlineData("scenes/map.uescene")]
+    [InlineData("Content/Map.umap.uescene")]
     public void TryWriteToDirRejectsResourceTargetAliasingFinalSceneBeforeStaging(string resourceUri)
     {
         using var temp = new TestDirectory();
@@ -984,7 +976,7 @@ public class UESceneBundleExporterTests
         var outside = Path.Combine(temp.Directory.Parent!.FullName, "outside.uemodel");
         var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(resource.LogicalUri, [1], [new(0)]))
         {
-            PathAttributes = path => path.EndsWith("Models", StringComparison.OrdinalIgnoreCase) ? FileAttributes.Directory | FileAttributes.ReparsePoint : null
+            PathAttributes = path => path.EndsWith("Content", StringComparison.OrdinalIgnoreCase) ? FileAttributes.Directory | FileAttributes.ReparsePoint : null
         };
 
         var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
@@ -1081,6 +1073,62 @@ public class UESceneBundleExporterTests
     }
 
     [Fact]
+    public void TryWriteToDestinationPromotesPublicationArtifactWithCanonicalScene()
+    {
+        using var game = new TestDirectory();
+        var destination = UESceneExportDestination.Allocate(game.Directory.FullName, "Content/Maps/City/City.umap");
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A",
+            Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair"))));
+        UEScenePublicationContext? captured = null;
+        var manifestRelativePath = Path.GetRelativePath(destination.ResourcePhysicalRoot,
+            destination.ScenePhysicalPath + ".EXPORT_MANIFEST.json").Replace('\\', '/');
+        var exporter = new UESceneBundleExporter(plan,
+            (resource, _) => UESceneProducedResource.FromMeshExport(resource.LogicalUri, [1], [new(0)]),
+            (context, _) =>
+            {
+                captured = context;
+                return [new UEScenePublicationArtifact(manifestRelativePath, [0x7B, 0x7D])];
+            });
+
+        var result = exporter.TryWriteToDestination(new(destination.ScenePhysicalPath, destination.ResourcePhysicalRoot,
+            destination.ResourceLogicalRoot, destination.ResourcePublicationPolicy), CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.NotNull(captured);
+        Assert.True(captured!.Result.Success);
+        Assert.Equal(destination.ScenePhysicalPath, captured.ScenePhysicalPath);
+        Assert.NotEmpty(captured.SceneBytes);
+        Assert.Equal([0x7B, 0x7D], File.ReadAllBytes(destination.ScenePhysicalPath + ".EXPORT_MANIFEST.json"));
+    }
+
+    [Fact]
+    public void PublicationArtifactRollsBackWithResourcesWhenScenePromotionFails()
+    {
+        using var game = new TestDirectory();
+        var destination = UESceneExportDestination.Allocate(game.Directory.FullName, "Content/Maps/City/City.umap");
+        var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A",
+            Component("A.Mesh", "StaticMesh", "/Game/Meshes/Chair"))));
+        Directory.CreateDirectory(Path.GetDirectoryName(destination.ScenePhysicalPath)!);
+        File.WriteAllBytes(destination.ScenePhysicalPath, [9, 8, 7]);
+        var manifestPath = destination.ScenePhysicalPath + ".EXPORT_MANIFEST.json";
+        File.WriteAllBytes(manifestPath, [6, 5, 4]);
+        var manifestRelativePath = Path.GetRelativePath(destination.ResourcePhysicalRoot, manifestPath).Replace('\\', '/');
+        var exporter = new UESceneBundleExporter(plan,
+            (resource, _) => UESceneProducedResource.FromMeshExport(resource.LogicalUri, [1], [new(0)]),
+            (_, _) => [new UEScenePublicationArtifact(manifestRelativePath, [1, 2, 3])])
+        {
+            FinalScenePromotionFailure = true
+        };
+
+        var result = exporter.TryWriteToDestination(new(destination.ScenePhysicalPath, destination.ResourcePhysicalRoot,
+            destination.ResourceLogicalRoot, destination.ResourcePublicationPolicy), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal([9, 8, 7], File.ReadAllBytes(destination.ScenePhysicalPath));
+        Assert.Equal([6, 5, 4], File.ReadAllBytes(manifestPath));
+    }
+
+    [Fact]
     public void TryWriteToDirPromotionFailureRestoresExistingResource()
     {
         using var temp = new TestDirectory();
@@ -1124,14 +1172,18 @@ public class UESceneBundleExporterTests
         using var temp = new TestDirectory();
         var plan = UESceneBundleExporter.BuildPlan(World(
             Actor("/Game/Map.Map:PersistentLevel.A", Component("A.One", "StaticMesh", "/Game/Meshes/One"), Component("A.Two", "StaticMesh", "/Game/Meshes/Two"))));
-        var oldResource = Path.Combine(temp.Directory.FullName, "Models", "Game_Meshes_One.uemodel");
-        var newResource = Path.Combine(temp.Directory.FullName, "Models", "Game_Meshes_Two.uemodel");
+        var oldResource = Path.Combine(temp.Directory.FullName, Assert.Single(plan.Document.Assets!, asset =>
+            asset.CanonicalUnrealPath == "/Game/Meshes/One").LogicalUri);
+        var newResource = Path.Combine(temp.Directory.FullName, Assert.Single(plan.Document.Assets!, asset =>
+            asset.CanonicalUnrealPath == "/Game/Meshes/Two").LogicalUri);
         Directory.CreateDirectory(Path.GetDirectoryName(oldResource)!);
         File.WriteAllBytes(oldResource, [1, 2, 3]);
         var scene = WriteExistingScene(temp.Directory);
         var exporter = new UESceneBundleExporter(plan, (resource, _) => UESceneProducedResource.FromMeshExport(resource.LogicalUri, [4, 5, 6], [new(0)])) { FinalScenePromotionFailure = true };
+        var destination = new UEScenePublicationDestination(scene, temp.Directory.FullName,
+            UESceneResourceLogicalRoot.GameExportTree, UESceneResourcePublicationPolicy.Overwrite);
 
-        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+        var result = exporter.TryWriteToDestination(destination, CancellationToken.None);
 
         Assert.False(result.Success);
         Assert.Equal(SceneExportErrorCode.PromotionFailed, result.Failure?.Code);
@@ -1156,8 +1208,11 @@ public class UESceneBundleExporterTests
             FinalResourcePromotionFailure = index => index == 1,
             RollbackFailure = (_, _) => new IOException("restore blocked")
         };
+        var destination = new UEScenePublicationDestination(
+            Path.Combine(temp.Directory.FullName, "Content", "Map.umap.uescene"), temp.Directory.FullName,
+            UESceneResourceLogicalRoot.GameExportTree, UESceneResourcePublicationPolicy.Overwrite);
 
-        var result = exporter.TryWriteToDir(temp.Directory, CancellationToken.None);
+        var result = exporter.TryWriteToDestination(destination, CancellationToken.None);
 
         Assert.False(result.Success);
         Assert.Equal(SceneExportErrorCode.PromotionFailed, result.Failure?.Code);
@@ -1254,15 +1309,13 @@ public class UESceneBundleExporterTests
     }
 
     [Fact]
-    public void PlanModelUri_EqualsBundleModeUEFormatModelUri()
+    public void PlanModelUri_EqualsCanonicalUEFormatModelUri()
     {
         const string canonicalPath = "/Game/Meshes/Chair.Chair";
         var plan = UESceneBundleExporter.BuildPlan(World(Actor("/Game/Map.Map:PersistentLevel.A", Component("A.Mesh", "StaticMesh", canonicalPath))));
         var plannedModel = Assert.Single(plan.Document.Assets!, asset => asset.Kind == AssetKind.StaticMesh);
 
-        Assert.Equal(
-            MaterialLinkBuilder.BuildModelPath(MaterialExportLayout.Categorized, "Game/Meshes/Chair.uemodel", canonicalPath),
-            plannedModel.LogicalUri);
+        Assert.Equal("Content/Meshes/Chair.uemodel", plannedModel.LogicalUri);
     }
 
     [Fact]
@@ -1611,7 +1664,7 @@ public class UESceneBundleExporterTests
     private static UEScenePlanningTransform Transform(float x = 0, float y = 0, float z = 0, float rx = 0, float ry = 0, float rz = 0, float rw = 1, float sx = 1, float sy = 1, float sz = 1) => new(x, y, z, rx, ry, rz, rw, sx, sy, sz);
     private static string WriteExistingScene(DirectoryInfo root)
     {
-        var path = Path.Combine(root.FullName, "Scenes", "Map.uescene");
+        var path = Path.Combine(root.FullName, "Content", "Map.umap.uescene");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, [9, 8, 7]);
         return path;

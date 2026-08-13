@@ -11,6 +11,7 @@ using CUE4Parse_Conversion.UEScene;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Actor;
 using CUE4Parse.UE4.Assets.Exports.Animation;
+using CUE4Parse.UE4.Objects.Engine.Animation;
 using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse.UE4.Assets.Exports.Nanite;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
@@ -171,6 +172,7 @@ namespace CUE4Parse_Conversion
                 UAnimSequence animSequence => new AnimExporter(animSequence, options),
                 UAnimMontage animMontage => new AnimExporter(animMontage, options),
                 UAnimComposite animComposite => new AnimExporter(animComposite, options),
+                UPoseAsset poseAsset => new PoseAssetExporter(poseAsset, options),
                 UMaterialInterface material => new MaterialExporter2(material, options),
                 USkeletalMesh skeletalMesh => new MeshExporter(skeletalMesh, options),
                 USkeleton skeleton => new MeshExporter(skeleton, options),

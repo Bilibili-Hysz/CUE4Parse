@@ -93,7 +93,7 @@ public class UEModel : UEFormatExport
             physicsChunk.Serialize(Ar);
         }*/
         FModelMaterialLinkWriter.Write(Ar, materialLinkMode, materialLinks);
-        FModelSkeletonExtensionWriter.WriteModelIdentity(Ar, FModelSkeletonIdentity.FromSkeleton(skeleton));
+        FModelSkeletonExtensionWriter.WriteModelIdentity(Ar, ModelSkeletonIdentity(skeleton, mesh.RefSkeleton));
     }
 
     public UEModel(string name, USkeleton skeleton, List<CSkelMeshBone> bones, FPackageIndex[] sockets, FVirtualBone[] virtualBones, ExporterOptions options, MaterialLinkMode materialLinkMode = MaterialLinkMode.None, FModelMaterialLinks? materialLinks = null) : base(name, options)
@@ -105,7 +105,7 @@ public class UEModel : UEFormatExport
             skeletonChunk.Serialize(Ar);
         }
         FModelMaterialLinkWriter.Write(Ar, materialLinkMode, materialLinks);
-        FModelSkeletonExtensionWriter.WriteModelIdentity(Ar, FModelSkeletonIdentity.FromSkeleton(skeleton));
+        FModelSkeletonExtensionWriter.WriteModelIdentity(Ar, ModelSkeletonIdentity(skeleton, bones));
     }
 
     private void SerializeStaticMeshData(FArchiveWriter archive, IReadOnlyCollection<CMeshVertex> verts, uint[] indices, FColor[]? vertexColors, CVertexColor[]? extraVertexColors, CMeshSection[] sections, FMeshUVFloat[][] extraUVs, FModelMaterialLinks? materialLinks = null)
@@ -255,6 +255,15 @@ public class UEModel : UEFormatExport
             }
             morphTargetsChunk.Serialize(archive);
         }
+    }
+
+    private static FModelSkeletonIdentity ModelSkeletonIdentity(
+        USkeleton skeleton,
+        IEnumerable<CSkelMeshBone> serializedBones)
+    {
+        return FModelSkeletonIdentity.FromSkeleton(
+            skeleton,
+            serializedBones.Select(bone => (bone.Name.Text, bone.ParentIndex)));
     }
 
     private void SerializeSkeletonData(FArchiveWriter archive, USkeleton? skeleton, List<CSkelMeshBone> bones, FPackageIndex[] sockets, FVirtualBone[] virtualBones)

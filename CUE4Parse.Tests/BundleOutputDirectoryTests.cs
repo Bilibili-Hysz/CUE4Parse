@@ -38,4 +38,18 @@ public class BundleOutputDirectoryTests
         Assert.False(Exporter.UsesBundleOutputRoot(typeof(UAnimSequence), options));
         Assert.False(Exporter.UsesBundleOutputRoot(typeof(ALandscapeProxy), options));
     }
+
+    [Fact]
+    public void ActorXBundle_DoesNotValidateOrUseTheUeFormatBundleRoot()
+    {
+        var options = new ExporterOptions
+        {
+            MaterialLinkMode = MaterialLinkMode.Bundle,
+            MeshFormat = EMeshFormat.ActorX,
+            MaterialLinkBundleRoot = string.Empty
+        };
+
+        Assert.False(Exporter.UsesBundleOutputRoot(typeof(UStaticMesh), options));
+        Assert.False(Exporter.UsesBundleOutputRoot(typeof(USkeletalMesh), options));
+    }
 }

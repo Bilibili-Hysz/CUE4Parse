@@ -30,11 +30,26 @@ public sealed class FModelSkeletonIdentity
     public static FModelSkeletonIdentity FromSkeleton(USkeleton skeleton)
     {
         ArgumentNullException.ThrowIfNull(skeleton);
-        var bones = skeleton.ReferenceSkeleton.FinalRefBoneInfo;
+        return FromSkeleton(
+            skeleton,
+            skeleton.ReferenceSkeleton.FinalRefBoneInfo.Select(
+                bone => (bone.Name.Text, bone.ParentIndex)));
+    }
+
+    /// <summary>
+    /// Creates an identity for a skeleton whose serialized bone layout may be a
+    /// mesh-specific subset or variant of <paramref name="skeleton"/>.
+    /// </summary>
+    public static FModelSkeletonIdentity FromSkeleton(
+        USkeleton skeleton,
+        IEnumerable<(string Name, int ParentIndex)> serializedBones)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+        ArgumentNullException.ThrowIfNull(serializedBones);
         return new FModelSkeletonIdentity(
             skeleton.GetPathName(),
             skeleton.Guid,
-            ComputeLayoutHash(bones.Select(bone => (bone.Name.Text, bone.ParentIndex))));
+            ComputeLayoutHash(serializedBones));
     }
 
     public static byte[] ComputeLayoutHash(IEnumerable<(string Name, int ParentIndex)> bones)

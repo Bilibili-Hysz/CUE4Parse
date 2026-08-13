@@ -1,4 +1,5 @@
 using CUE4Parse_Conversion;
+using CUE4Parse_Conversion.Meshes;
 using CUE4Parse_Conversion.UEFormat.MaterialLinks;
 using FModel.Settings;
 using FModel.ViewModels;
@@ -101,36 +102,44 @@ public class MaterialLinkSettingsTests
     }
 
     [Fact]
-    public void UESceneDirectory_DefaultsUnderOutputAndSettingsSnapshotRespectsCancelAndSave()
+    public void ActorXBundle_DoesNotRequireAnIrrelevantUeFormatBundleRoot()
     {
         var original = UserSettings.Default;
         try
         {
             UserSettings.Default = new UserSettings
             {
-                OutputDirectory = "Output",
-                UESceneDirectory = "Original",
+                MeshExportFormat = EMeshFormat.ActorX,
+                MaterialLinkMode = MaterialLinkMode.Bundle,
+                MaterialLinkBundleRoot = string.Empty,
                 CurrentDir = DirectorySettings.Default("Test", "Test")
             };
             var settingsView = new SettingsViewModel();
             settingsView.Initialize();
-            settingsView.UESceneDirectory = "Changed";
 
-            Assert.Equal("Original", UserSettings.Default.UESceneDirectory);
-
-            settingsView.Initialize();
-            Assert.Equal("Original", settingsView.UESceneDirectory);
-
-            settingsView.UESceneDirectory = "Applied";
-            settingsView.Save(out _);
-
-            Assert.Equal("Applied", UserSettings.Default.UESceneDirectory);
-            Assert.Equal(Path.Combine("Output", "UEScene"), new UserSettings { OutputDirectory = "Output" }.UESceneDirectory);
+            Assert.False(settingsView.RequiresUserManagedBundleRoot);
+            Assert.False(settingsView.MaterialLinkBundleSettingsEnabled);
+            Assert.Null(Record.Exception(() => settingsView.Save(out _)));
         }
         finally
         {
             UserSettings.Default = original;
         }
+    }
+
+    [Fact]
+    public void UESceneSettings_KeepOnlyCanonicalGameExportTreeStrategy()
+    {
+        var settings = new UserSettings
+        {
+            CurrentDir = DirectorySettings.Default("Test", "Test"),
+            UESceneExportStrategy = CUE4Parse_Conversion.UEScene.UESceneExportStrategy.SelfContained
+        };
+
+        Assert.Equal(CUE4Parse_Conversion.UEScene.UESceneExportStrategy.ReuseGameExportTree,
+            settings.UESceneExportStrategy);
+        Assert.DoesNotContain(typeof(UserSettings).GetProperties(), property =>
+            property.Name == "UESceneDirectory");
     }
 
     [Theory]

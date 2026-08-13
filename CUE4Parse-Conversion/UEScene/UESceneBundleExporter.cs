@@ -16,12 +16,17 @@ public sealed class UESceneBundleExporter
 {
     private readonly UESceneBundlePlan? _plan;
     private readonly Func<UEScenePlannedResource, CancellationToken, UESceneProducedResource>? _resourceProducer;
+    private readonly Func<UEScenePublicationContext, CancellationToken, IReadOnlyList<UEScenePublicationArtifact>>? _publicationArtifactProducer;
 
     public UESceneBundleExporter() { }
-    public UESceneBundleExporter(UESceneBundlePlan plan, Func<UEScenePlannedResource, CancellationToken, UESceneProducedResource> resourceProducer)
+    public UESceneBundleExporter(
+        UESceneBundlePlan plan,
+        Func<UEScenePlannedResource, CancellationToken, UESceneProducedResource> resourceProducer,
+        Func<UEScenePublicationContext, CancellationToken, IReadOnlyList<UEScenePublicationArtifact>>? publicationArtifactProducer = null)
     {
         _plan = plan ?? throw new ArgumentNullException(nameof(plan));
         _resourceProducer = resourceProducer ?? throw new ArgumentNullException(nameof(resourceProducer));
+        _publicationArtifactProducer = publicationArtifactProducer;
     }
 
     // Test-only seam for exercising rollback after a prior target was promoted.
@@ -44,9 +49,9 @@ public sealed class UESceneBundleExporter
         try
         {
             return TryWriteToDestination(new UEScenePublicationDestination(
-                Path.Combine(bundleRoot.FullName, "Scenes", SceneFileName(_plan.Document.Metadata.SourceWorldPath)),
+                Path.Combine(bundleRoot.FullName, "Content", SceneRelativeDirectory(_plan.Document.Metadata.SourceWorldPath), SceneFileName(_plan.Document.Metadata.SourceWorldPath)),
                 bundleRoot.FullName,
-                UESceneResourceLogicalRoot.SceneBundle, UESceneResourcePublicationPolicy.Overwrite), cancellationToken);
+                UESceneResourceLogicalRoot.GameExportTree, UESceneResourcePublicationPolicy.ReuseIdenticalOnly), cancellationToken);
         }
         catch (Exception ex)
         {
@@ -72,6 +77,7 @@ public sealed class UESceneBundleExporter
         try
         {
             ValidateDestinationLogicalRoot(destination);
+            UESceneExportDestination.ValidateCanonicalPlacement(destination.ResourcePhysicalRoot, destination.ScenePhysicalPath);
             EnsureBundleRoot(bundleRoot);
             scenePath = ResolveContainedPath(bundleRoot, destination.ScenePhysicalPath);
             cancellationToken.ThrowIfCancellationRequested();
@@ -136,12 +142,20 @@ public sealed class UESceneBundleExporter
             document = FinalizeDocument(reconciledDocument, staged, producedResources);
             finalPlan = CreateFinalPlan(document, producedResources);
             var sceneBytes = UESceneWriter.Write(document);
-            UESceneReader.Read(sceneBytes);
+            // The writer assigns canonical serialized IDs. Read the staged wire form before
+            // generating additional publication artifacts so their metadata and the returned
+            // result describe exactly the same identity graph Blender will import.
+            document = UESceneReader.Read(sceneBytes);
+            finalPlan = CreateFinalPlan(document, producedResources);
             var stagedScenePath = StagePath(stage, Path.GetRelativePath(bundleRoot.FullName, scenePath));
             File.WriteAllBytes(stagedScenePath, sceneBytes);
             var verifiedScene = File.ReadAllBytes(stagedScenePath);
             if (verifiedScene.Length != sceneBytes.Length || !SHA256.HashData(verifiedScene).SequenceEqual(SHA256.HashData(sceneBytes)))
                 throw new IOException("Failed to verify staged scene.");
+
+            var provisionalResult = CreatePublishedResult(scenePath, document, finalPlan);
+            var stagedPublicationArtifacts = StagePublicationArtifacts(stage, bundleRoot, scenePath,
+                provisionalResult, sceneBytes, finalPlan.Resources, cancellationToken);
 
             var rollback = CreateDirectory(stage, Path.Combine(stage.FullName, ".rollback"));
             var reusableExisting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -181,6 +195,20 @@ public sealed class UESceneBundleExporter
                 promotionIndex++;
             }
 
+            foreach (var artifact in stagedPublicationArtifacts)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var finalPath = FinalPath(bundleRoot, artifact.RelativePath);
+                string? backupPath = null;
+                if (File.Exists(finalPath))
+                {
+                    backupPath = StagePath(rollback, Path.GetRelativePath(bundleRoot.FullName, finalPath));
+                    File.Move(finalPath, backupPath);
+                }
+                promoted.Add((finalPath, backupPath));
+                File.Move(artifact.StagedPath, finalPath, true);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             CreateDirectory(bundleRoot, Path.GetDirectoryName(scenePath)!);
             string? sceneBackupPath = null;
@@ -195,13 +223,7 @@ public sealed class UESceneBundleExporter
             File.Move(stagedScenePath, scenePath, true);
             document = UESceneReader.Read(File.ReadAllBytes(scenePath));
             finalPlan = CreateFinalPlan(document, producedResources);
-            result = new(true, scenePath, null, FinalDocument: document, FinalPlan: finalPlan,
-                ActorCount: document.Actors?.Count ?? 0,
-                ComponentCount: document.Components?.Count ?? 0,
-                MeshCount: document.Assets?.Count(asset => asset.Kind == AssetKind.StaticMesh) ?? 0,
-                InstanceCount: document.InstanceTransforms?.Count ?? 0,
-                DiagnosticCount: document.Diagnostics?.Count ?? 0,
-                ResourceCount: finalPlan.Resources.Count);
+            result = provisionalResult;
         }
         catch (Exception ex)
         {
@@ -275,6 +297,62 @@ public sealed class UESceneBundleExporter
         var win32Code = exception.HResult & 0xffff;
         return win32Code is 39 or 112;
     }
+
+    private SceneExportResult CreatePublishedResult(string scenePath, UESceneDocument document, UESceneFinalBundlePlan finalPlan) =>
+        new(true, scenePath, null, FinalDocument: document, FinalPlan: finalPlan,
+            ActorCount: document.Actors?.Count ?? 0,
+            ComponentCount: document.Components?.Count ?? 0,
+            MeshCount: document.Assets?.Count(asset => asset.Kind == AssetKind.StaticMesh) ?? 0,
+            InstanceCount: document.InstanceTransforms?.Count ?? 0,
+            DiagnosticCount: document.Diagnostics?.Count ?? 0,
+            ResourceCount: finalPlan.Resources.Count);
+
+    private IReadOnlyList<StagedPublicationArtifact> StagePublicationArtifacts(
+        DirectoryInfo stage,
+        DirectoryInfo bundleRoot,
+        string scenePath,
+        SceneExportResult result,
+        byte[] sceneBytes,
+        IReadOnlyList<UESceneFinalResource> finalResources,
+        CancellationToken cancellationToken)
+    {
+        if (_publicationArtifactProducer is null) return [];
+
+        var artifacts = _publicationArtifactProducer(
+            new UEScenePublicationContext(result, bundleRoot.FullName, scenePath, sceneBytes), cancellationToken)
+            ?? throw new InvalidDataException("UEScene publication artifact producer returned null.");
+        var reservedTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            Path.GetFullPath(scenePath)
+        };
+        foreach (var resource in finalResources)
+            reservedTargets.Add(ResolvePath(bundleRoot, resource.LogicalUri));
+
+        var stagedArtifacts = new List<StagedPublicationArtifact>(artifacts.Count);
+        foreach (var artifact in artifacts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (artifact is null || string.IsNullOrWhiteSpace(artifact.RelativePath))
+                throw new InvalidDataException("UEScene publication artifact must have a safe relative path.");
+            if (artifact.Bytes is null || artifact.Bytes.Length == 0)
+                throw new InvalidDataException($"UEScene publication artifact '{artifact.RelativePath}' has no bytes.");
+
+            var finalPath = ResolvePath(bundleRoot, artifact.RelativePath);
+            if (!reservedTargets.Add(finalPath))
+                throw new InvalidDataException($"UEScene publication artifact '{artifact.RelativePath}' aliases a scene or resource target.");
+
+            var stagedPath = StagePath(stage, artifact.RelativePath);
+            File.WriteAllBytes(stagedPath, artifact.Bytes);
+            var verified = File.ReadAllBytes(stagedPath);
+            if (verified.Length != artifact.Bytes.Length || !SHA256.HashData(verified).SequenceEqual(SHA256.HashData(artifact.Bytes)))
+                throw new IOException($"Failed to verify staged publication artifact '{artifact.RelativePath}'.");
+            stagedArtifacts.Add(new(artifact.RelativePath, stagedPath));
+        }
+
+        return stagedArtifacts;
+    }
+
+    private sealed record StagedPublicationArtifact(string RelativePath, string StagedPath);
 
     private void ValidateSidecars(IEnumerable<UESceneProducedSidecar> sidecars, DirectoryInfo bundleRoot)
     {
@@ -602,6 +680,20 @@ public sealed class UESceneBundleExporter
             throw new InvalidDataException($"Bundle target traverses reparse point '{path}'.");
     }
 
+    private static string SceneRelativeDirectory(string sourceWorldPath)
+    {
+        if (string.IsNullOrWhiteSpace(sourceWorldPath) || sourceWorldPath.Contains('\\') || sourceWorldPath.StartsWith("//", StringComparison.Ordinal) ||
+            sourceWorldPath.Contains(':') || sourceWorldPath.Split('/').Any(segment => segment is "." or ".."))
+            throw new InvalidDataException("Source world path is not a safe logical path.");
+        var normalized = sourceWorldPath.TrimStart('/');
+        if (normalized.StartsWith("Game/", StringComparison.Ordinal)) normalized = normalized[5..];
+        var packagePath = normalized.Split('.', StringSplitOptions.RemoveEmptyEntries)[0];
+        var segments = packagePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0 || segments.Any(segment => segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0))
+            throw new InvalidDataException("Source world path does not have a safe directory.");
+        return segments.Length == 1 ? string.Empty : Path.Combine(segments[..^1]);
+    }
+
     private static string SceneFileName(string sourceWorldPath)
     {
         if (string.IsNullOrWhiteSpace(sourceWorldPath) || sourceWorldPath.Contains('\\') || sourceWorldPath.StartsWith("//", StringComparison.Ordinal) ||
@@ -610,11 +702,11 @@ public sealed class UESceneBundleExporter
         var name = sourceWorldPath.Split(['/', '.'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
         if (string.IsNullOrWhiteSpace(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             throw new InvalidDataException("Source world path does not have a safe filename.");
-        return name + ".uescene";
+        return name + ".umap.uescene";
     }
 
     public UESceneBundlePlan BuildPlan(UWorld world, ExporterOptions options,
-        UESceneResourceLogicalRoot resourceLogicalRoot = UESceneResourceLogicalRoot.SceneBundle, CancellationToken token = default)
+        UESceneResourceLogicalRoot resourceLogicalRoot = UESceneResourceLogicalRoot.GameExportTree, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(options);
@@ -627,7 +719,7 @@ public sealed class UESceneBundleExporter
     }
 
     public static UESceneBundlePlan BuildPlan(UEScenePlanningWorld world, ExporterOptions? options = null, CancellationToken token = default) =>
-        new UESceneBundleExporter().BuildPlanningWorld(world, options ?? new ExporterOptions(), UESceneResourceLogicalRoot.SceneBundle, token);
+        new UESceneBundleExporter().BuildPlanningWorld(world, options ?? new ExporterOptions(), UESceneResourceLogicalRoot.GameExportTree, token);
 
     public static UESceneBundlePlan BuildPlan(UEScenePlanningWorld world, UESceneResourceLogicalRoot resourceLogicalRoot,
         ExporterOptions? options = null, CancellationToken token = default) =>
@@ -638,6 +730,7 @@ public sealed class UESceneBundleExporter
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(options);
+        resourceLogicalRoot = UESceneExportDestination.NormalizeLogicalRoot(resourceLogicalRoot);
         token.ThrowIfCancellationRequested();
         var resourceUriPolicy = options.ResourceUriPolicy ?? new UESceneResourceUriPolicy(resourceLogicalRoot);
         if (resourceUriPolicy.LogicalRoot != resourceLogicalRoot)
@@ -835,7 +928,7 @@ public sealed class UESceneBundleExporter
     private void ValidateDestinationLogicalRoot(UEScenePublicationDestination destination)
     {
         var planUsesGameExportTree = (_plan!.Document.Metadata.OptionalFeatures & SceneMetadata.GameExportTreeRootBit) != 0;
-        var destinationUsesGameExportTree = destination.ResourceLogicalRoot == UESceneResourceLogicalRoot.GameExportTree;
+        var destinationUsesGameExportTree = UESceneExportDestination.NormalizeLogicalRoot(destination.ResourceLogicalRoot) == UESceneResourceLogicalRoot.GameExportTree;
         if (planUsesGameExportTree != destinationUsesGameExportTree)
             throw new InvalidDataException("UEScene plan metadata logical root does not match the destination resource logical root.");
     }
@@ -1006,6 +1099,13 @@ public sealed record UESceneProducedLod(uint SourceLodIndex, float SourceScreenS
 public sealed record UEScenePublicationDestination(string ScenePhysicalPath, string ResourcePhysicalRoot,
     UESceneResourceLogicalRoot ResourceLogicalRoot,
     UESceneResourcePublicationPolicy ResourcePublicationPolicy = UESceneResourcePublicationPolicy.Overwrite);
+
+/// <summary>Metadata required to stage additional files atomically with a UESCENE publication.</summary>
+public sealed record UEScenePublicationContext(SceneExportResult Result, string ResourcePhysicalRoot,
+    string ScenePhysicalPath, byte[] SceneBytes);
+
+/// <summary>A contained relative file staged and promoted in the same transaction as the scene.</summary>
+public sealed record UEScenePublicationArtifact(string RelativePath, byte[] Bytes);
 public sealed record UESceneProducedResource(string LogicalUri, byte[] Bytes, IReadOnlyList<UESceneProducedLod> Lods, IReadOnlyList<UESceneProducedSidecar> Sidecars,
     IReadOnlyList<UESceneProducedMaterialSlot>? MaterialSlotMappings = null,
     IReadOnlyList<UESceneProducedDiagnostic>? Diagnostics = null)

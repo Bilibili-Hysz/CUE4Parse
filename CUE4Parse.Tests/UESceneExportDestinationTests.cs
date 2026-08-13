@@ -5,29 +5,29 @@ namespace CUE4Parse.Tests;
 public class UESceneExportDestinationTests
 {
     [Fact]
-    public void DefaultStrategyIsSelfContained()
+    public void DefaultStrategyIsGameExportTree()
     {
-        Assert.Equal(UESceneExportStrategy.SelfContained, default(UESceneExportStrategy));
+        Assert.Equal(UESceneExportStrategy.ReuseGameExportTree, UESceneExportDestination.NormalizeStrategy(default(UESceneExportStrategy)));
     }
 
     [Fact]
-    public void SelfContainedUsesCanonicalMapPathBelowUescenes()
+    public void DefaultUsesCanonicalMapPathBesideUmap()
     {
         var destination = UESceneExportDestination.Allocate(@"D:\Exports\Game", "Content/Maps/City/City.umap");
 
-        Assert.Equal(Path.Combine(@"D:\Exports\Game", "Uescenes", "Content", "Maps", "City", "City"), destination.ScenePhysicalRoot);
-        Assert.Equal("City.uescene", destination.SceneFileName);
-        Assert.Equal(destination.ScenePhysicalRoot, destination.ResourcePhysicalRoot);
-        Assert.Equal(UESceneResourceLogicalRoot.SceneBundle, destination.ResourceLogicalRoot);
+        Assert.Equal(Path.Combine(@"D:\Exports\Game", "Content", "Maps", "City"), destination.ScenePhysicalRoot);
+        Assert.Equal("City.umap.uescene", destination.SceneFileName);
+        Assert.Equal(@"D:\Exports\Game", destination.ResourcePhysicalRoot);
+        Assert.Equal(UESceneResourceLogicalRoot.GameExportTree, destination.ResourceLogicalRoot);
     }
 
     [Fact]
-    public void SelfContainedCanonicalizesUppercaseUmapExtension()
+    public void DefaultCanonicalizesUppercaseUmapExtension()
     {
         var destination = UESceneExportDestination.Allocate(@"D:\Exports\Game", "Content/Maps/City/City.UMAP");
 
-        Assert.Equal(Path.Combine(@"D:\Exports\Game", "Uescenes", "Content", "Maps", "City", "City"), destination.ScenePhysicalRoot);
-        Assert.Equal("City.uescene", destination.SceneFileName);
+        Assert.Equal(Path.Combine(@"D:\Exports\Game", "Content", "Maps", "City"), destination.ScenePhysicalRoot);
+        Assert.Equal("City.umap.uescene", destination.SceneFileName);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class UESceneExportDestinationTests
     }
 
     [Fact]
-    public void SameBasenameInDifferentParentsGetsDistinctSelfContainedRoots()
+    public void SameBasenameInDifferentParentsGetsDistinctGameTreeRoots()
     {
         var city = UESceneExportDestination.Allocate(@"D:\Exports\Game", "Content/Maps/City/Shared.umap");
         var forest = UESceneExportDestination.Allocate(@"D:\Exports\Game", "Content/Maps/Forest/Shared.umap");
@@ -64,7 +64,16 @@ public class UESceneExportDestinationTests
     {
         var destination = UESceneExportDestination.Allocate(@"D:\Exports\Game", @"Content\Maps\City\City.umap");
 
-        Assert.Equal(Path.Combine(@"D:\Exports\Game", "Uescenes", "Content", "Maps", "City", "City"), destination.ScenePhysicalRoot);
+        Assert.Equal(Path.Combine(@"D:\Exports\Game", "Content", "Maps", "City"), destination.ScenePhysicalRoot);
+    }
+
+    [Fact]
+    public void RejectsLegacyScenePrivatePlacement()
+    {
+        using var temp = new TestDirectory();
+
+        Assert.Throws<InvalidDataException>(() => UESceneExportDestination.ValidateCanonicalPlacement(
+            temp.Directory.FullName, Path.Combine(temp.Directory.FullName, "Level.uescene")));
     }
 
     [Theory]
@@ -86,5 +95,12 @@ public class UESceneExportDestinationTests
     public void RejectsNonAbsoluteGameExportRoots(string root)
     {
         Assert.Throws<ArgumentException>(() => UESceneExportDestination.Allocate(root, "Content/Maps/City/City.umap"));
+    }
+
+    private sealed class TestDirectory : IDisposable
+    {
+        public DirectoryInfo Directory { get; } = new(Path.Combine(Path.GetTempPath(), "CUE4Parse.Tests", Path.GetRandomFileName()));
+        public TestDirectory() => Directory.Create();
+        public void Dispose() { if (Directory.Exists) Directory.Delete(true); }
     }
 }

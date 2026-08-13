@@ -2,14 +2,16 @@ namespace CUE4Parse_Conversion.UEScene;
 
 public enum UESceneExportStrategy
 {
-    SelfContained,
-    ReuseGameExportTree
+    // Retained only so older persisted settings can be normalized safely.
+    SelfContained = 0,
+    ReuseGameExportTree = 1
 }
 
 public enum UESceneResourceLogicalRoot
 {
-    SceneBundle,
-    GameExportTree
+    // Retained only for source compatibility; canonical publication always normalizes to GameExportTree.
+    SceneBundle = 0,
+    GameExportTree = 1
 }
 
 public enum UESceneResourcePublicationPolicy
@@ -18,7 +20,7 @@ public enum UESceneResourcePublicationPolicy
     ReuseIdenticalOnly
 }
 
-/// <summary>Pure allocation of a scene file and the root used by its resource logical URIs.</summary>
+/// <summary>Canonical UESCENE destination: a scene reference beside the project export tree.</summary>
 public sealed record UESceneExportDestination(
     string ScenePhysicalRoot,
     string SceneFileName,
@@ -28,38 +30,58 @@ public sealed record UESceneExportDestination(
 {
     public string ScenePhysicalPath => Path.Combine(ScenePhysicalRoot, SceneFileName);
 
+    public static UESceneExportStrategy NormalizeStrategy(UESceneExportStrategy strategy) => strategy switch
+    {
+        UESceneExportStrategy.SelfContained => UESceneExportStrategy.ReuseGameExportTree,
+        UESceneExportStrategy.ReuseGameExportTree => UESceneExportStrategy.ReuseGameExportTree,
+        _ => throw new ArgumentOutOfRangeException(nameof(strategy))
+    };
+
+    public static UESceneResourceLogicalRoot NormalizeLogicalRoot(UESceneResourceLogicalRoot logicalRoot) => logicalRoot switch
+    {
+        UESceneResourceLogicalRoot.SceneBundle => UESceneResourceLogicalRoot.GameExportTree,
+        UESceneResourceLogicalRoot.GameExportTree => UESceneResourceLogicalRoot.GameExportTree,
+        _ => throw new ArgumentOutOfRangeException(nameof(logicalRoot))
+    };
+
+    /// <summary>Rejects legacy scene-private destinations before publication.
+    /// A canonical UESCENE must be placed under the project's Content tree and use
+    /// the map-qualified .umap.uescene filename.
+    /// </summary>
+    public static void ValidateCanonicalPlacement(string resourcePhysicalRoot, string scenePhysicalPath)
+    {
+        if (string.IsNullOrWhiteSpace(resourcePhysicalRoot) || !Path.IsPathFullyQualified(resourcePhysicalRoot))
+            throw new ArgumentException("UEScene resource root must be an absolute path.", nameof(resourcePhysicalRoot));
+        if (string.IsNullOrWhiteSpace(scenePhysicalPath) || !Path.IsPathFullyQualified(scenePhysicalPath))
+            throw new ArgumentException("UEScene scene path must be an absolute path.", nameof(scenePhysicalPath));
+
+        var root = Path.GetFullPath(resourcePhysicalRoot);
+        var scene = Path.GetFullPath(scenePhysicalPath);
+        var relative = Path.GetRelativePath(root, scene).Replace('\\', '/');
+        if (relative.StartsWith("../", StringComparison.Ordinal) || relative.Equals("..", StringComparison.Ordinal) ||
+            !relative.StartsWith("Content/", StringComparison.OrdinalIgnoreCase) ||
+            !relative.EndsWith(".umap.uescene", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("UEScene scene must be placed beside its UMAP under the project Content tree.");
+    }
+
     public static UESceneExportDestination Allocate(string gameExportRoot, string canonicalUmapPath,
-        UESceneExportStrategy strategy = UESceneExportStrategy.SelfContained)
+        UESceneExportStrategy strategy = UESceneExportStrategy.ReuseGameExportTree)
     {
         if (string.IsNullOrWhiteSpace(gameExportRoot) || !Path.IsPathFullyQualified(gameExportRoot))
             throw new ArgumentException("Game export root must be an absolute path.", nameof(gameExportRoot));
-        if (!Enum.IsDefined(strategy))
-            throw new ArgumentOutOfRangeException(nameof(strategy));
 
+        strategy = NormalizeStrategy(strategy);
         var root = Path.GetFullPath(gameExportRoot);
         var segments = ValidateUmapPath(canonicalUmapPath);
         var fileName = Path.ChangeExtension(segments[^1], ".umap");
-        var mapName = Path.GetFileNameWithoutExtension(fileName);
         var mapDirectory = segments[..^1];
 
-        return strategy switch
-        {
-            UESceneExportStrategy.SelfContained => AllocateSelfContained(root, mapDirectory, mapName),
-            UESceneExportStrategy.ReuseGameExportTree => new(
-                Path.Combine([root, .. mapDirectory]),
-                fileName + ".uescene",
-                root,
-                UESceneResourceLogicalRoot.GameExportTree,
-                UESceneResourcePublicationPolicy.ReuseIdenticalOnly),
-            _ => throw new ArgumentOutOfRangeException(nameof(strategy))
-        };
-    }
-
-    private static UESceneExportDestination AllocateSelfContained(string gameExportRoot, string[] mapDirectory, string mapName)
-    {
-        var sceneRoot = Path.Combine([gameExportRoot, "Uescenes", .. mapDirectory, mapName]);
-        return new(sceneRoot, mapName + ".uescene", sceneRoot, UESceneResourceLogicalRoot.SceneBundle,
-            UESceneResourcePublicationPolicy.Overwrite);
+        return new(
+            Path.Combine([root, .. mapDirectory]),
+            fileName + ".uescene",
+            root,
+            UESceneResourceLogicalRoot.GameExportTree,
+            UESceneResourcePublicationPolicy.ReuseIdenticalOnly);
     }
 
     private static string[] ValidateUmapPath(string canonicalUmapPath)

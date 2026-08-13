@@ -151,8 +151,7 @@ public static class MaterialLinkBuilder
         if (mode == MaterialLinkMode.Embedded) return target;
         if (mode == MaterialLinkMode.Relative)
         {
-            var relative = Path.GetRelativePath(Path.GetDirectoryName(Normalize(modelPath)) ?? string.Empty, target).Replace('\\', '/');
-            return relative;
+            return RelativeResourceUri.FromOwner(modelPath, target);
         }
         if (mode != MaterialLinkMode.Bundle) throw new ArgumentOutOfRangeException(nameof(mode));
         ValidateBundleRoot(bundleRoot);
@@ -165,15 +164,8 @@ public static class MaterialLinkBuilder
             throw new ArgumentException("Bundle mode requires an absolute physical bundle root.", nameof(bundleRoot));
     }
 
-    private static string Normalize(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || path.Contains('\0') || path.Contains('\\') ||
-            Path.IsPathRooted(path) || (path.Length >= 2 && char.IsLetter(path[0]) && path[1] == ':'))
-            throw new ArgumentException("Material resource path must be a safe logical path.", nameof(path));
-        var result = path;
-        if (result.Split('/').Any(part => part is "" or "." or "..")) throw new ArgumentException("Material resource path contains traversal.", nameof(path));
-        return result;
-    }
+    private static string Normalize(string path) =>
+        RelativeResourceUri.NormalizeLogicalPath(path, nameof(path));
 
     private static string BuildCategorizedPath(string category, string filename, string? identity)
     {
