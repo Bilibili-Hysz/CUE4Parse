@@ -29,6 +29,26 @@ public abstract class ExporterBase : IExporter
 
     internal ExportSession? _session = null;
     protected ExportSession Session => _session ?? throw new InvalidOperationException("Exporter must be added to an ExportSession before use");
+    protected CUE4Parse_Conversion.Options.ExportOptions Options => Session.Options;
+
+    /// <summary>Read-only access for host adapters while the session is running.</summary>
+    public CUE4Parse_Conversion.Options.ExportOptions CurrentOptions => Options;
+
+    private readonly object _buildExportFilesLock = new();
+    private IReadOnlyList<ExportFile>? _builtExportFiles;
+
+    /// <summary>
+    /// Returns the exact ExportFile list that ExportAsync will write, without writing it.
+    /// The result is cached so projection and the later queue pass share one upstream build.
+    /// </summary>
+    public IReadOnlyList<ExportFile> BuildExportFilesForProjection(CancellationToken ct = default)
+    {
+        if (_session is null)
+            throw new InvalidOperationException("Exporter must be added to an ExportSession before projection");
+        if (Session.Extension is null || Options.MeshFormat != CUE4Parse_Conversion.Options.EMeshFormat.UEFormat)
+            throw new InvalidOperationException("Exporter projection is available only inside an extension-enabled UEFormat session.");
+        return GetExportFiles(ct);
+    }
 
     protected internal ILogger Log { get; }
 
@@ -68,7 +88,9 @@ public abstract class ExporterBase : IExporter
     {
         try
         {
-            var files = BuildExportFiles(ct);
+            var files = Session.Extension is not null && Options.MeshFormat == CUE4Parse_Conversion.Options.EMeshFormat.UEFormat
+                ? GetExportFiles(ct)
+                : BuildExportFiles(ct);
             if (files.Count == 0)
             {
                 throw new Exception("Format produced no files");
@@ -82,6 +104,18 @@ public abstract class ExporterBase : IExporter
         {
             Log.Error(ex, "Failed to export");
             return ExportResult.Failure(ObjectPath, ex);
+        }
+    }
+
+    private IReadOnlyList<ExportFile> GetExportFiles(CancellationToken ct = default)
+    {
+        if (Volatile.Read(ref _builtExportFiles) is { } cached)
+            return cached;
+
+        lock (_buildExportFilesLock)
+        {
+            ct.ThrowIfCancellationRequested();
+            return _builtExportFiles ??= BuildExportFiles(ct);
         }
     }
 

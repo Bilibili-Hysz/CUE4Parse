@@ -27,6 +27,18 @@ public sealed class UEAnim : UEFormatExport
         }
     }
 
+    public UEAnim(
+        string name,
+        CAnimSet animSet,
+        int sequenceIndex,
+        string sourceAnimationPath,
+        FModelSkeletonIdentity targetSkeleton,
+        ExportOptions options)
+        : this(name, animSet, sequenceIndex, options)
+    {
+        FModelSkeletonExtensionWriter.WriteTargetSkeleton(Ar, sourceAnimationPath, targetSkeleton);
+    }
+
     public UEAnim(string name, UAnimStreamable animStreamable, ExportOptions options) : base(name, options)
     {
         var framesPerSecond = animStreamable.NumFrames / animStreamable.SequenceLength;

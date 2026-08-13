@@ -23,6 +23,13 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
     internal readonly Action<StreamingLevelFilterArgs, CancellationToken>? _streamingLevelFilter = streamingLevelFilter;
     internal readonly SemaphoreSlim _streamingLevelFilterLock = new(1, 1);
 
+    /// <summary>Optional host-provided mesh-format extension. Null preserves upstream behavior.</summary>
+    public IExportSessionExtension? Extension { get; init; }
+
+    /// <summary>Stable identity shared by Export Session and FModel Print feedback.</summary>
+    public string OperationId { get; } = Guid.NewGuid().ToString("N");
+
+
     public int MaxDegreeOfParallelism { get; init; } = Environment.ProcessorCount;
 
     private DirectoryInfo? _baseDirectory;
@@ -38,8 +45,12 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
     private int _running;
     public bool IsRunning => Volatile.Read(ref _running) == 1;
 
-    private readonly ConcurrentQueue<IExporter> _roots = new();
+    private readonly record struct QueuedExporter(ExporterBase Exporter, long Generation);
+    private readonly ConcurrentQueue<QueuedExporter> _roots = new();
     private readonly ConcurrentDictionary<string, byte> _paths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, QueuedExporter> _exporters = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _queueStateLock = new();
+    private long _nextQueueGeneration;
 
     public ExportSession Add(UObject export)
     {
@@ -63,26 +74,56 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 
     public ExportSession Add(ExporterBase exporter)
     {
-        // TODO: this prevents 2 exporters messing with the same file from being enqueued in the same run (e.g. MeshExporter / RawDataExporter)
-        if (!_paths.TryAdd(exporter.ObjectPath, 0)) return this;
+        AddOrGet(exporter);
+        return this;
+    }
 
-        exporter._session = this;
-        _roots.Enqueue(exporter);
+    /// <summary>
+    /// Queues an exporter and returns the canonical exporter for its ObjectPath.
+    /// This lets adapters inspect the same queue-owned exporter that will later write.
+    /// </summary>
+    public ExporterBase AddOrGet(ExporterBase exporter)
+    {
+        ArgumentNullException.ThrowIfNull(exporter);
+        lock (_queueStateLock)
+        {
+            if (_exporters.TryGetValue(exporter.ObjectPath, out var existing))
+                return existing.Exporter;
 
-        Interlocked.Increment(ref _totalQueued);
+            // TODO: this prevents 2 exporters messing with the same file from being enqueued in the same run (e.g. MeshExporter / RawDataExporter)
+            if (!_paths.TryAdd(exporter.ObjectPath, 0))
+            {
+                if (_exporters.TryGetValue(exporter.ObjectPath, out existing))
+                    return existing.Exporter;
+                throw new InvalidOperationException("Export queue path registry is inconsistent.");
+            }
+
+            // Prepare canonical identity, generation and accounting before publishing to the runnable queue.
+            exporter._session = this;
+            var queuedExporter = new QueuedExporter(exporter, ++_nextQueueGeneration);
+            _exporters[exporter.ObjectPath] = queuedExporter;
+            Interlocked.Increment(ref _totalQueued);
+            _roots.Enqueue(queuedExporter);
+        }
+
         OnPropertyChanged(nameof(TotalQueued));
         OnPropertyChanged(nameof(HasQueuedItems));
         exporter.Log.Debug("Queued for export");
-        return this;
+        return exporter;
     }
 
     public bool Remove(string objectPath)
     {
-        // the exporter stays in _roots but we won't process it, it's fine because nothing actually relies on _roots.Count
-        if (IsRunning || !_paths.TryRemove(objectPath, out _))
-            return false;
+        lock (_queueStateLock)
+        {
+            // the exporter stays in _roots but we won't process it, it's fine because nothing actually relies on _roots.Count
+            if (IsRunning || !_paths.TryRemove(objectPath, out _))
+                return false;
 
-        Interlocked.Decrement(ref _totalQueued);
+            _exporters.TryRemove(objectPath, out _);
+            Interlocked.Decrement(ref _totalQueued);
+        }
+
         OnPropertyChanged(nameof(TotalQueued));
         OnPropertyChanged(nameof(HasQueuedItems));
         return true;
@@ -90,9 +131,14 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 
     public void Clear()
     {
-        _roots.Clear();
-        _paths.Clear();
-        Interlocked.Exchange(ref _totalQueued, 0);
+        lock (_queueStateLock)
+        {
+            _roots.Clear();
+            _paths.Clear();
+            _exporters.Clear();
+            Interlocked.Exchange(ref _totalQueued, 0);
+        }
+
         OnPropertyChanged(nameof(TotalQueued));
         OnPropertyChanged(nameof(HasQueuedItems));
     }
@@ -114,10 +160,13 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             while (true)
             {
                 current.Clear();
-                while (_roots.TryDequeue(out var exporter))
+                while (_roots.TryDequeue(out var queuedExporter))
                 {
                     ct.ThrowIfCancellationRequested();
-                    if (_paths.ContainsKey(exporter.ObjectPath)) // false = exporter was added but then manually removed
+                    var exporter = queuedExporter.Exporter;
+                    if (_exporters.TryGetValue(exporter.ObjectPath, out var canonical)
+                        && canonical.Generation == queuedExporter.Generation
+                        && ReferenceEquals(canonical.Exporter, exporter)) // false = exporter was removed or superseded
                         current.Add(exporter);
                 }
                 if (current.Count == 0) break;
@@ -167,3 +216,4 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
+

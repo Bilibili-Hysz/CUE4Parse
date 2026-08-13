@@ -41,12 +41,21 @@ public abstract class MeshExporter<T>(T mesh) : ExporterBase(mesh) where T : UOb
         return paths;
     }
 
-    private IMeshExportFormat GetMeshFormat(EMeshFormat format) => format switch
+    private IMeshExportFormat GetMeshFormat(EMeshFormat format)
     {
-        EMeshFormat.ActorX => new ActorXMeshFormat(),
-        EMeshFormat.Gltf2 => new GltfMeshFormat(),
-        EMeshFormat.UEFormat => new UEFormatMeshFormat(),
-        EMeshFormat.USD => new UsdMeshFormat(),
-        _ => throw new NotSupportedException($"Mesh export does not support format {format}. Available formats: {string.Join(", ", Enum.GetNames<EMeshFormat>())}")
-    };
+        // The host extension is intentionally queried only for UEFormat.
+        // ActorX, GLTF and USD retain the official format switch unchanged.
+        if (format == EMeshFormat.UEFormat &&
+            Session.Extension?.TryCreateMeshFormat(mesh, format, Session) is { } externalFormat)
+            return externalFormat;
+
+        return format switch
+        {
+            EMeshFormat.ActorX => new ActorXMeshFormat(),
+            EMeshFormat.Gltf2 => new GltfMeshFormat(),
+            EMeshFormat.UEFormat => new UEFormatMeshFormat(),
+            EMeshFormat.USD => new UsdMeshFormat(),
+            _ => throw new NotSupportedException($"Mesh export does not support format {format}. Available formats: {string.Join(", ", Enum.GetNames<EMeshFormat>())}")
+        };
+    }
 }
