@@ -16,6 +16,17 @@ public sealed class UEPose : UEFormatExport
         SerializeCurves(poseAsset);
     }
 
+    public UEPose(
+        string name,
+        CPoseAsset poseAsset,
+        string sourcePosePath,
+        FModelSkeletonIdentity targetSkeleton,
+        ExportOptions options)
+        : this(name, poseAsset, options)
+    {
+        FModelSkeletonExtensionWriter.WriteTargetPose(Ar, sourcePosePath, targetSkeleton);
+    }
+
     private void SerializePoses(CPoseAsset poseAsset)
     {
         using var posesChunk = new FDataChunk("POSES", poseAsset.Poses.Count);
