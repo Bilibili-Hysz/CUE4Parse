@@ -50,6 +50,25 @@ public abstract class ExporterBase : IExporter
         return GetExportFiles(ct);
     }
 
+    /// <summary>
+    /// Releases the cached output buffers created for projection or the current export.
+    ///
+    /// <para>
+    /// UEFormat projection deliberately reuses the exact <see cref="ExportFile"/> list
+    /// that the exporter will later write. Those files can contain large byte arrays,
+    /// so retaining the list for the lifetime of a large session creates avoidable
+    /// Large Object Heap pressure. The list returned by a previous call remains valid
+    /// for its caller; this method only removes the exporter-owned cache reference.
+    /// </para>
+    /// </summary>
+    public void ReleaseCachedExportFiles()
+    {
+        lock (_buildExportFilesLock)
+        {
+            Volatile.Write(ref _builtExportFiles, null);
+        }
+    }
+
     protected internal ILogger Log { get; }
 
     private ExporterBase(string packagePath, string objectName, string className)
@@ -104,6 +123,13 @@ public abstract class ExporterBase : IExporter
         {
             Log.Error(ex, "Failed to export");
             return ExportResult.Failure(ObjectPath, ex);
+        }
+        finally
+        {
+            // The output paths are retained in ExportResult, not the byte buffers.
+            // Drop the exporter-owned buffers as soon as this exporter has finished
+            // writing, rather than keeping every model/texture in the session cache.
+            ReleaseCachedExportFiles();
         }
     }
 
