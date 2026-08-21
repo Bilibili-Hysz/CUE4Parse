@@ -103,7 +103,7 @@ public abstract class ExporterBase : IExporter
 
     protected abstract IReadOnlyList<ExportFile> BuildExportFiles(CancellationToken ct = default);
 
-    public async Task<ExportResult> ExportAsync(CancellationToken ct = default)
+    public virtual async Task<ExportResult> ExportAsync(CancellationToken ct = default)
     {
         try
         {

@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using CUE4Parse.FileProvider;
+using CUE4Parse.FileProvider.Objects;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Actor;
 using CUE4Parse.UE4.Assets.Exports.Animation;
@@ -20,7 +22,7 @@ namespace CUE4Parse_Conversion;
 
 public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationToken>? streamingLevelFilter = null) : INotifyPropertyChanged, IDisposable
 {
-    private const int MaxInFlightBatchSize = 64;
+    private const int MaxActiveTaskCount = 64;
 
     internal readonly Action<StreamingLevelFilterArgs, CancellationToken>? _streamingLevelFilter = streamingLevelFilter;
     internal readonly SemaphoreSlim _streamingLevelFilterLock = new(1, 1);
@@ -32,10 +34,9 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
     public string OperationId { get; } = Guid.NewGuid().ToString("N");
 
     /// <summary>
-    /// Default export parallelism is capped because UE assets are memory-heavy:
-    /// mesh decoding, texture mip encoding and UEFormat compression can each keep
-    /// several large buffers alive at once. Hosts may opt into a different value
-    /// explicitly when they have measured sufficient memory headroom.
+    /// Maximum active exporters. The scheduler caps the effective value at 64 because
+    /// mesh decoding, texture encoding and compression may each own large buffers.
+    /// Pending built-in work is represented by lightweight deferred descriptors.
     /// </summary>
     public int MaxDegreeOfParallelism { get; init; } = Math.Max(1, Math.Min(Environment.ProcessorCount, 8));
 
@@ -45,8 +46,12 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
     private ExportOptions? _options;
     internal ExportOptions Options => _options ?? throw new InvalidOperationException("Session is not currently running.");
 
-    private int _totalQueued;
-    public int TotalQueued => Volatile.Read(ref _totalQueued);
+    private readonly ExportTaskQueue _taskQueue = new();
+    private readonly ExportResourceManager _resourceManager = new();
+    private readonly object _lifecycleLock = new();
+    private readonly AsyncLocal<int> _exporterExecutionDepth = new();
+
+    public int TotalQueued => _taskQueue.OutstandingCount;
     public bool HasQueuedItems => TotalQueued > 0;
 
     private int _running;
@@ -55,81 +60,56 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
     private int _disposed;
 
     /// <summary>
-    /// A queue item contains only the de-duplication key. The exporter itself is held
-    /// by <see cref="ExporterRegistration"/> while it is pending/running. This is
-    /// important for Remove(): a canceled item must be releasable even though the
-    /// concurrent queue cannot remove an arbitrary item in-place.
+    /// Queues a built-in exporter for an Unreal object. Provider-backed package
+    /// exports are held weakly and reloaded by the session resource manager if they
+    /// are collected before a worker starts. Use <see cref="Add(ExporterBase)"/> when
+    /// the exact in-memory exporter state must remain alive.
     /// </summary>
-    private readonly record struct QueuedExporter(string ObjectPath, long Generation);
-
-    /// <summary>
-    /// Keeps a strong reference only while an exporter is pending or running.
-    /// Completed exporters are represented by a weak reference so path de-duplication
-    /// remains stable without retaining every UObject and package graph until the
-    /// whole session finishes.
-    /// </summary>
-    private sealed class ExporterRegistration(ExporterBase exporter, long generation)
+    public ExportSession Add(UObject export)
     {
-        private ExporterBase? _strongExporter = exporter;
-        private WeakReference<ExporterBase>? _weakExporter;
-
-        public long Generation { get; } = generation;
-
-        public bool TryGetExporter(out ExporterBase result)
-        {
-            if (_strongExporter is { } strong)
-            {
-                result = strong;
-                return true;
-            }
-
-            if (_weakExporter?.TryGetTarget(out var weak) == true)
-            {
-                result = weak;
-                return true;
-            }
-
-            result = null!;
-            return false;
-        }
-
-        public bool Matches(ExporterBase exporter)
-        {
-            return TryGetExporter(out var current) && ReferenceEquals(current, exporter);
-        }
-
-        public void MarkCompleted()
-        {
-            if (_strongExporter is { } strong)
-            {
-                _weakExporter = new WeakReference<ExporterBase>(strong);
-                _strongExporter = null;
-            }
-        }
+        ArgumentNullException.ThrowIfNull(export);
+        EnsureSupportedExportType(export);
+        AddOrGet(DeferredObjectExporter.TryCreate(export) ?? CreateExporter(export));
+        return this;
     }
 
-    private readonly ConcurrentQueue<QueuedExporter> _roots = new();
-    private readonly ConcurrentDictionary<string, byte> _paths = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, ExporterRegistration> _exporters = new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _queueStateLock = new();
-    private long _nextQueueGeneration;
+    private static void EnsureSupportedExportType(UObject export)
+    {
+        if (export is UTexture
+            or UMaterialInterface
+            or USkeletalMesh
+            or UStaticMesh
+            or USkeleton
+            or UPoseAsset
+            or UAnimationAsset
+            or UDNAAsset
+            or UWorld
+            or ALandscapeProxy
+            or ULandscapeComponent
+            or USplineMeshComponent)
+        {
+            return;
+        }
 
-    public ExportSession Add(UObject export)
+        throw new NotSupportedException($"Could not create exporter for export of type '{export.GetType().Name}'.");
+    }
+
+    internal static ExporterBase CreateExporter(UObject export)
     {
         return export switch
         {
-            UTexture texture => Add(new TextureExporter(texture)),
-            UMaterialInterface material => Add(new MaterialExporter(material)),
-            USkeletalMesh skeletalMesh => Add(new SkeletalMeshExporter(skeletalMesh)),
-            UStaticMesh staticMesh => Add(new StaticMeshExporter(staticMesh)),
-            USkeleton skeleton => Add(new SkeletonExporter(skeleton)),
-            UPoseAsset poseAsset => Add(new PoseAssetExporter(poseAsset)),
-            UAnimationAsset animation => Add(new AnimationExporter(animation)),
-            UDNAAsset dna => Add(new DnaExporter(dna)),
-            UWorld world => Add(new WorldExporter(world)),
-            ALandscapeProxy landscape => Add(new LandscapeMeshExporter(landscape)),
-            ULandscapeComponent landscape => Add(new LandscapeMeshExporter2(landscape)),
-            USplineMeshComponent spline => Add(new SplineMeshExporter(spline)),
+            UTexture texture => new TextureExporter(texture),
+            UMaterialInterface material => new MaterialExporter(material),
+            USkeletalMesh skeletalMesh => new SkeletalMeshExporter(skeletalMesh),
+            UStaticMesh staticMesh => new StaticMeshExporter(staticMesh),
+            USkeleton skeleton => new SkeletonExporter(skeleton),
+            UPoseAsset poseAsset => new PoseAssetExporter(poseAsset),
+            UAnimationAsset animation => new AnimationExporter(animation),
+            UDNAAsset dna => new DnaExporter(dna),
+            UWorld world => new WorldExporter(world),
+            ALandscapeProxy landscape => new LandscapeMeshExporter(landscape),
+            ULandscapeComponent landscape => new LandscapeMeshExporter2(landscape),
+            USplineMeshComponent spline => new SplineMeshExporter(spline),
             _ => throw new NotSupportedException($"Could not create exporter for export of type '{export.GetType().Name}'.")
         };
     }
@@ -142,71 +122,40 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 
     /// <summary>
     /// Queues an exporter and returns the canonical exporter for its ObjectPath.
-    /// This lets adapters inspect the same queue-owned exporter that will later write.
-    ///
-    /// <para>
-    /// Once a path has completed, its strong exporter reference is released. If the
-    /// weak canonical exporter is still alive it is returned for projection; if it has
-    /// already been collected, the supplied exporter is prepared as a short-lived
-    /// projection-only instance and is deliberately not queued a second time.
-    /// </para>
+    /// Projection callers may receive their supplied exporter as a non-queued view
+    /// when that path is already running or completed. A pending deferred descriptor
+    /// is promoted to the concrete exporter so projection and the later disk write
+    /// can share the same cached output bytes.
     /// </summary>
     public ExporterBase AddOrGet(ExporterBase exporter)
     {
         ArgumentNullException.ThrowIfNull(exporter);
-        lock (_queueStateLock)
+        ThrowIfDisposed();
+
+        exporter._session = this;
+        var isDependency = IsRunning && _exporterExecutionDepth.Value > 0;
+        var canonical = _taskQueue.AddOrGet(exporter, isDependency, out var added, out var promoted);
+        canonical._session = this;
+
+        if (added)
         {
-            ThrowIfDisposed();
-
-            if (_exporters.TryGetValue(exporter.ObjectPath, out var existing))
-            {
-                if (existing.TryGetExporter(out var canonical))
-                    return canonical;
-
-                // The path was already exported, but the canonical exporter has
-                // been collected. Do not enqueue a duplicate; return this short-lived
-                // projection-only instance so callers can still inspect the format.
-                exporter._session = this;
-                return exporter;
-            }
-
-            // TODO: this prevents 2 exporters messing with the same file from being enqueued in the same run (e.g. MeshExporter / RawDataExporter)
-            if (!_paths.TryAdd(exporter.ObjectPath, 0))
-            {
-                // A completed path can remain in the lightweight path registry after
-                // its exporter has been released. Preserve de-duplication and return
-                // a non-queued instance for projection-only callers.
-                exporter._session = this;
-                return exporter;
-            }
-
-            // Prepare canonical identity, generation and accounting before publishing to the runnable queue.
-            exporter._session = this;
-            var queuedExporter = new QueuedExporter(exporter.ObjectPath, ++_nextQueueGeneration);
-            _exporters[exporter.ObjectPath] = new ExporterRegistration(exporter, queuedExporter.Generation);
-            Interlocked.Increment(ref _totalQueued);
-            _roots.Enqueue(queuedExporter);
+            SafeOnPropertyChanged(nameof(TotalQueued));
+            SafeOnPropertyChanged(nameof(HasQueuedItems));
+            canonical.Log.Debug(isDependency ? "Queued export dependency" : "Queued for export");
+        }
+        else if (promoted)
+        {
+            canonical.Log.Debug("Promoted deferred export task for output projection");
         }
 
-        SafeOnPropertyChanged(nameof(TotalQueued));
-        SafeOnPropertyChanged(nameof(HasQueuedItems));
-        exporter.Log.Debug("Queued for export");
-        return exporter;
+        return canonical;
     }
 
     public bool Remove(string objectPath)
     {
-        lock (_queueStateLock)
-        {
-            ThrowIfDisposed();
-            // The exporter stays in _roots but will not be processed; the generation
-            // check in RunAsync ignores it after the path registration is removed.
-            if (IsRunning || !_paths.TryRemove(objectPath, out _))
-                return false;
-
-            _exporters.TryRemove(objectPath, out _);
-            Interlocked.Decrement(ref _totalQueued);
-        }
+        ThrowIfDisposed();
+        if (IsRunning || !_taskQueue.Remove(objectPath))
+            return false;
 
         SafeOnPropertyChanged(nameof(TotalQueued));
         SafeOnPropertyChanged(nameof(HasQueuedItems));
@@ -215,88 +164,82 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 
     public void Clear()
     {
-        lock (_queueStateLock)
-        {
-            ThrowIfDisposed();
-            if (IsRunning)
-                throw new InvalidOperationException("Cannot clear an ExportSession while it is running.");
+        ThrowIfDisposed();
+        if (IsRunning)
+            throw new InvalidOperationException("Cannot clear an ExportSession while it is running.");
 
-            ClearQueueCore();
-        }
-
+        ClearQueueCore();
         SafeOnPropertyChanged(nameof(TotalQueued));
         SafeOnPropertyChanged(nameof(HasQueuedItems));
     }
 
-    public async Task<IReadOnlyList<ExportResult>> RunAsync(string baseDirectory, ExportOptions options, IProgress<ExportProgress>? progress = null, CancellationToken ct = default)
+    /// <summary>
+    /// Keeps a running session open while a host streams roots into it. The lease
+    /// must be opened before <see cref="RunAsync"/> can observe an empty queue and
+    /// must be disposed when production is complete. Exporters continue to use the
+    /// regular Add methods; this lease owns only producer lifetime.
+    /// </summary>
+    public IDisposable OpenProducer()
     {
-        lock (_queueStateLock)
+        ThrowIfDisposed();
+        return _taskQueue.OpenProducer();
+    }
+
+    public async Task<IReadOnlyList<ExportResult>> RunAsync(
+        string baseDirectory,
+        ExportOptions options,
+        IProgress<ExportProgress>? progress = null,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        ArgumentNullException.ThrowIfNull(options);
+        if (MaxDegreeOfParallelism < 1)
+            throw new ArgumentOutOfRangeException(nameof(MaxDegreeOfParallelism), "Export parallelism must be at least one.");
+
+        lock (_lifecycleLock)
         {
             ThrowIfDisposed();
             if (IsRunning)
                 throw new InvalidOperationException("Session is already running.");
 
+            _baseDirectory = new DirectoryInfo(baseDirectory);
+            _options = options;
+            _taskQueue.BeginRun();
             Volatile.Write(ref _running, 1);
         }
 
         var results = new ConcurrentQueue<ExportResult>();
         var completed = 0;
-        var batchSize = GetBatchSize();
-        var current = new List<ExporterBase>(batchSize);
         try
         {
             SafeOnPropertyChanged(nameof(IsRunning));
-            ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
-            ArgumentNullException.ThrowIfNull(options);
-            _baseDirectory = new DirectoryInfo(baseDirectory);
-            _options = options;
 
-            var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = MaxDegreeOfParallelism, CancellationToken = ct };
-            while (true)
+            var workerCount = Math.Min(MaxActiveTaskCount, MaxDegreeOfParallelism);
+            var workers = new Task[workerCount];
+            for (var workerIndex = 0; workerIndex < workers.Length; workerIndex++)
             {
-                current.Clear();
-                while (current.Count < batchSize && _roots.TryDequeue(out var queuedExporter))
-                {
-                    ct.ThrowIfCancellationRequested();
-                    ExporterBase? exporter = null;
-                    lock (_queueStateLock)
-                    {
-                        if (_exporters.TryGetValue(queuedExporter.ObjectPath, out var canonical)
-                            && canonical.Generation == queuedExporter.Generation
-                            && canonical.TryGetExporter(out var currentExporter))
-                        {
-                            exporter = currentExporter;
-                        }
-                    }
-
-                    if (exporter is not null) // null = exporter was removed or superseded
-                        current.Add(exporter);
-                }
-
-                if (current.Count == 0) break;
-
-                await Parallel.ForEachAsync(current, parallelOptions, Process).ConfigureAwait(false);
-                MarkBatchCompleted(current);
+                // Exporter conversion performs substantial synchronous work before
+                // its first asynchronous file write. Starting workers on the pool is
+                // required so a streaming host can continue producing queue roots.
+                workers[workerIndex] = Task.Run(() => WorkerAsync(ct), CancellationToken.None);
             }
+
+            await Task.WhenAll(workers).ConfigureAwait(false);
         }
-        finally // just in case cancellation is requested, we still need to clear things up
+        finally
         {
-            current.Clear();
             var stillQueued = TotalQueued;
             var count = Volatile.Read(ref completed);
 
             try
             {
-                lock (_queueStateLock)
-                {
-                    ClearQueueCore();
-                }
+                _taskQueue.EndRunAndClear();
+                _resourceManager.Clear();
             }
             finally
             {
-                // State reset must not be placed after a host callback. A broken
-                // progress/UI subscriber must never leave the session running or
-                // retain the active options and output directory.
+                // Reset state before invoking host callbacks. A broken UI/progress
+                // subscriber must never leave active options, paths or queue roots.
                 _options = null;
                 _baseDirectory = null;
                 Volatile.Write(ref _running, 0);
@@ -310,30 +253,43 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 
         return [.. results];
 
-        async ValueTask Process(ExporterBase exporter, CancellationToken token)
+        async Task WorkerAsync(CancellationToken token)
         {
-            var result = await exporter.ExportAsync(token).ConfigureAwait(false);
-            results.Enqueue(result);
+            while (await _taskQueue.DequeueAsync(token).ConfigureAwait(false) is { } lease)
+            {
+                ExportResult? result = null;
+                var previousDepth = _exporterExecutionDepth.Value;
+                _exporterExecutionDepth.Value = previousDepth + 1;
+                try
+                {
+                    result = await lease.Exporter.ExportAsync(token).ConfigureAwait(false);
+                    results.Enqueue(result);
+                }
+                finally
+                {
+                    _exporterExecutionDepth.Value = previousDepth;
+                    var stillQueued = _taskQueue.Complete(lease);
+                    SafeOnPropertyChanged(nameof(TotalQueued));
+                    SafeOnPropertyChanged(nameof(HasQueuedItems));
 
-            var stillQueued = Interlocked.Decrement(ref _totalQueued);
-            var count = Interlocked.Increment(ref completed);
-            SafeOnPropertyChanged(nameof(TotalQueued));
-            SafeOnPropertyChanged(nameof(HasQueuedItems));
-
-            SafeReport(progress, new ExportProgress(count, count + stillQueued, result));
+                    if (result is not null)
+                    {
+                        var count = Interlocked.Increment(ref completed);
+                        SafeReport(progress, new ExportProgress(count, count + stillQueued, result));
+                    }
+                }
+            }
         }
     }
 
-    private int GetBatchSize()
+    internal Task<UObject> ResolveDeferredExportAsync(
+        IFileProvider provider,
+        GameFile packageFile,
+        int exportIndex,
+        CancellationToken cancellationToken)
     {
-        // Do not materialize the entire session queue into a strong-reference list:
-        // the queue may contain thousands of UObject-backed exporters. A small
-        // multiple of the worker count keeps the pipeline fed while allowing the
-        // completed batch to release its exporter references before the next batch
-        // is dequeued. The long calculation also keeps an invalidly large explicit
-        // MaxDegreeOfParallelism from overflowing before ParallelOptions validates it.
-        var parallelism = Math.Max(1L, MaxDegreeOfParallelism);
-        return (int)Math.Min(MaxInFlightBatchSize, parallelism * 2L);
+        ThrowIfDisposed();
+        return _resourceManager.ResolveExportAsync(provider, packageFile, exportIndex, cancellationToken);
     }
 
     internal string ResolveOutputPath(string savePath, string ext, string? nameSuffix = null)
@@ -347,27 +303,10 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    private void MarkBatchCompleted(IReadOnlyList<ExporterBase> exporters)
-    {
-        lock (_queueStateLock)
-        {
-            foreach (var exporter in exporters)
-            {
-                if (_exporters.TryGetValue(exporter.ObjectPath, out var registration)
-                    && registration.Matches(exporter))
-                {
-                    registration.MarkCompleted();
-                }
-            }
-        }
-    }
-
     private void ClearQueueCore()
     {
-        _roots.Clear();
-        _paths.Clear();
-        _exporters.Clear();
-        Interlocked.Exchange(ref _totalQueued, 0);
+        _taskQueue.Clear();
+        _resourceManager.Clear();
     }
 
     private void ThrowIfDisposed()
@@ -403,7 +342,7 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 
     public void Dispose()
     {
-        lock (_queueStateLock)
+        lock (_lifecycleLock)
         {
             if (Volatile.Read(ref _disposed) != 0)
                 return;
@@ -411,7 +350,8 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
                 throw new InvalidOperationException("Cannot dispose an ExportSession while it is running.");
 
             Volatile.Write(ref _disposed, 1);
-            ClearQueueCore();
+            _taskQueue.Dispose();
+            _resourceManager.Clear();
         }
 
         _options = null;
@@ -421,4 +361,3 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
         GC.SuppressFinalize(this);
     }
 }
-
