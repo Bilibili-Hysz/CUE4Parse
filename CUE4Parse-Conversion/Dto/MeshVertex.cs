@@ -26,7 +26,7 @@ public readonly struct MeshVertex : IMeshVertex, INaniteVertex<MeshVertex>
     public FVector4 Tangent { get; } = FVector4.ZeroVector;
     public FMeshUVFloat Uv { get; } = FMeshUVFloat.ZeroVector;
 
-    private MeshVertex(FVector position, FVector4 normal, FVector4 tangent, FMeshUVFloat uv)
+    public MeshVertex(FVector position, FVector4 normal, FVector4 tangent, FMeshUVFloat uv)
     {
         Position = position;
         Normal = normal;

@@ -9,6 +9,7 @@ using CUE4Parse.UE4.Assets.Exports.GeometryCollection;
 using CUE4Parse.UE4.Assets.Exports.Nanite;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
+using CUE4Parse.UE4.Objects.Chaos.GeometryCollection;
 using CUE4Parse.UE4.Objects.Core.Math;
 using CUE4Parse.UE4.Objects.UObject;
 using CUE4Parse.UE4.Versions;
@@ -191,13 +192,12 @@ public class StaticMeshDto : MeshDto<MeshVertex>
     /// </summary>
     public StaticMeshDto(UObject owner, MeshMaterialDto[] materials, FNaniteResources nanite, ENaniteMeshFormat naniteFormat = ENaniteMeshFormat.NaniteOnly) : base(owner, materials)
     {
-        Bounds = new FBox(FVector.ZeroVector, FVector.OneVector);
-
         if (nanite.PageStreamingStates.Length > 0)
         {
             ParseNaniteResources(this, nanite, naniteFormat);
         }
 
+        Bounds = LODs.FirstOrDefault()?.CalculateLodBounds() ?? new FBox(FVector.ZeroVector, FVector.OneVector);
         SetLodSuffixes();
     }
 
@@ -227,22 +227,33 @@ public class StaticMeshDto : MeshDto<MeshVertex>
         SetLodSuffixes();
     }
 
-    public StaticMeshDto(UGeometryCollection mesh, EMeshQuality quality = EMeshQuality.All, ENaniteMeshFormat naniteFormat = ENaniteMeshFormat.NoNanite) : base(mesh)
+    public StaticMeshDto(UGeometryCollection mesh, ENaniteMeshFormat naniteFormat = ENaniteMeshFormat.NoNanite) : base(mesh)
     {
-        if (mesh.RenderData?.NaniteResources is not { PageStreamingStates.Length: > 0 } nanite) return;
+        FBox? bounds = null;
+        if (mesh.RenderData?.PreSkinnedBounds is { } preSkinnedBounds)
+            bounds = preSkinnedBounds.GetBox();
+        else if (mesh.RenderData?.MeshDescription?.PreSkinnedBounds is { } meshDescriptionBounds)
+            bounds = meshDescriptionBounds.GetBox();
 
-        ParseNaniteResources(this, nanite, naniteFormat);
+        if (naniteFormat != ENaniteMeshFormat.NaniteOnly)
+        {
+            ParseCollectionData(mesh.RenderData, mesh.GeometryCollection);
+        }
 
-        if (nanite.MeshBounds is { } meshBounds)
-            Bounds = meshBounds.GetBox();
-        else if (mesh.RenderData.PreSkinnedBounds is { }  preSkinnedBounds )
-            Bounds = preSkinnedBounds.GetBox();
-        else if (mesh.RenderData.MeshDescription?.PreSkinnedBounds  is { } meshDescriptionBounds)
-            Bounds = meshDescriptionBounds.GetBox();
-        else if (LODs.First() is { } naniteLod)
-            Bounds = naniteLod.CalculateLodBounds();
-        else
-            return;
+        var shouldParseNanite = naniteFormat != ENaniteMeshFormat.NoNanite || LODs.Count == 0;
+        if (shouldParseNanite && mesh.RenderData?.NaniteResources is { PageStreamingStates.Length: > 0 } nanite)
+        {
+            ParseNaniteResources(this, nanite, naniteFormat);
+            if (nanite.MeshBounds is { } meshBounds)
+                bounds = meshBounds.GetBox();
+        }
+        else if (LODs.Count == 0)
+        {
+            ParseCollectionData(mesh.RenderData, mesh.GeometryCollection);
+        }
+
+        bounds ??= LODs.FirstOrDefault()?.CalculateLodBounds();
+        Bounds = bounds ?? new FBox(FVector.ZeroVector, FVector.OneVector);
         SetLodSuffixes();
     }
 
@@ -263,6 +274,36 @@ public class StaticMeshDto : MeshDto<MeshVertex>
 
             LODs.Add(MeshLodDto<MeshVertex>.FromStaticMesh(this, sourceLodIndex, renderData.LODs[sourceLodIndex], screenSize, spline));
         }
+    }
+
+    private void ParseCollectionData(FGeometryCollectionRenderData? renderData, FGeometryCollection? collection)
+    {
+        if (renderData?.bHasMeshData == false) return;
+
+        var resources = renderData?.MeshResources;
+        var description = renderData?.MeshDescription;
+        if (renderData?.CustomData is List<(FGeometryCollectionMeshResources?, FGeometryCollectionMeshDescription?)> { Count: > 0 } customData)
+        {
+            resources = customData[0].Item1;
+            description = customData[0].Item2;
+        }
+
+        if (resources is not null && description is not null)
+        {
+            LODs.Add(MeshLodDto<MeshVertex>.FromRenderData(this, 0u, resources, description.Value, collection));
+            return;
+        }
+
+        if (collection is not null &&
+            collection.GroupInfo.TryGetValue("Vertices", out var vertices) && vertices.Size > 0 &&
+            collection.GroupInfo.TryGetValue("Faces", out var faces) && faces.Size > 0 &&
+            collection.GroupInfo.TryGetValue("Material", out var material) && material.Size > 0)
+        {
+            LODs.Add(MeshLodDto<MeshVertex>.FromArrayCollection(this, 0u, collection));
+            return;
+        }
+
+        throw new InvalidOperationException("Geometry collection has no render data or vertex data");
     }
 
     public override void Dispose()

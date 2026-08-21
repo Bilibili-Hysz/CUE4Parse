@@ -8,6 +8,7 @@ using CUE4Parse.UE4.Assets.Exports.Actor;
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Assets.Exports.Component.Landscape;
 using CUE4Parse.UE4.Assets.Exports.Component.SplineMesh;
+using CUE4Parse.UE4.Assets.Exports.GeometryCollection;
 using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse.UE4.Assets.Exports.Rig;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
@@ -79,6 +80,7 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             or UMaterialInterface
             or USkeletalMesh
             or UStaticMesh
+            or UGeometryCollection
             or USkeleton
             or UPoseAsset
             or UAnimationAsset
@@ -102,6 +104,7 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             UMaterialInterface material => new MaterialExporter(material),
             USkeletalMesh skeletalMesh => new SkeletalMeshExporter(skeletalMesh),
             UStaticMesh staticMesh => new StaticMeshExporter(staticMesh),
+            UGeometryCollection geometryCollection => new GeometryCollectionExporter(geometryCollection),
             USkeleton skeleton => new SkeletonExporter(skeleton),
             UPoseAsset poseAsset => new PoseAssetExporter(poseAsset),
             UAnimationAsset animation => new AnimationExporter(animation),
