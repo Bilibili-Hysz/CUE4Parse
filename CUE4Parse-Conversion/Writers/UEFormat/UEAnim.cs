@@ -54,8 +54,22 @@ public sealed class UEAnim : UEFormatExport
     }
 
     public UEAnim(string name, string objectPath, UAnimStreamable animStreamable, ExportOptions options)
+        : this(name, objectPath, animStreamable, options, null, null)
+    {
+    }
+
+    public UEAnim(
+        string name,
+        string objectPath,
+        UAnimStreamable animStreamable,
+        ExportOptions options,
+        string? sourceAnimationPath,
+        FModelSkeletonIdentity? targetSkeleton)
         : base(name, objectPath, options)
     {
+        if ((sourceAnimationPath is null) != (targetSkeleton is null))
+            throw new ArgumentException("FModel animation provenance requires both source path and target skeleton identity.");
+
         var framesPerSecond = animStreamable.NumFrames / animStreamable.SequenceLength;
 
         WriteRoot(root =>
@@ -72,6 +86,9 @@ public sealed class UEAnim : UEFormatExport
 
             if (animStreamable.RawCurveData?.FloatCurves is { Length: > 0 } floatCurves)
                 WriteCurves(root, floatCurves, framesPerSecond);
+
+            if (sourceAnimationPath is not null)
+                FModelSkeletonExtensionWriter.WriteTargetSkeleton(root, sourceAnimationPath, targetSkeleton!);
         });
     }
 

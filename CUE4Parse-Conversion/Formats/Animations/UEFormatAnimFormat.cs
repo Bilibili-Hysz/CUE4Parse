@@ -30,7 +30,7 @@ public sealed class UEFormatAnimFormat(
     public IReadOnlyList<ExportFile> BuildAnimStreamable(string objectName, string objectPath, ExportOptions options, UAnimStreamable animStreamable)
     {
         using var ar = new FArchiveWriter();
-        new UEAnim(objectName, objectPath, animStreamable, options).Save(ar);
+        new UEAnim(objectName, objectPath, animStreamable, options, sourceAnimationPath, targetSkeleton).Save(ar);
         return [new ExportFile("ueanim", ar.GetBuffer())];
     }
 }

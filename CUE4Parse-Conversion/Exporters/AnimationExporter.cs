@@ -20,7 +20,10 @@ public sealed class AnimationExporter(UAnimationAsset animation) : ExporterBase(
         return format switch
         {
             // TODO: should we extend IAnimExportFormat to handle these for all writers?
-            UEFormatAnimFormat when animation is UAnimStreamable streamable => new UEFormatAnimFormat().BuildAnimStreamable(ObjectName, ObjectPath, Session.Options, streamable),
+            // Keep the FModel provenance carried by the selected UEFormat format.
+            // Reconstructing a default writer here silently dropped the target
+            // skeleton attribute for UAnimStreamable assets.
+            UEFormatAnimFormat ueFormat when animation is UAnimStreamable streamable => ueFormat.BuildAnimStreamable(ObjectName, ObjectPath, Session.Options, streamable),
             _ => format.Build(ObjectName, ObjectPath, Session.Options, animation.ConvertAnims())
         };
     }
