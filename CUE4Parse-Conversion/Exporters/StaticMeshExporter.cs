@@ -33,6 +33,6 @@ public sealed class GeometryCollectionExporter(UGeometryCollection originalMesh)
         }
 
         var materialPaths = EnqueueMaterials(dto.Materials);
-        return format.BuildStaticMesh(ObjectName, Session.Options, dto, materialPaths);
+        return format.BuildStaticMesh(ObjectName, ObjectPath, Session.Options, dto, materialPaths);
     }
 }

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using CUE4Parse_Conversion.PoseAsset;
 using CUE4Parse_Conversion.Formats.PoseAsset;
 using CUE4Parse_Conversion.Options;
+using CUE4Parse_Conversion.Writers.UEFormat;
+using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Objects.Engine.Animation;
 
 namespace CUE4Parse_Conversion.Exporters;
@@ -18,13 +20,20 @@ public class PoseAssetExporter(UPoseAsset poseAsset) : ExporterBase(poseAsset)
             throw new Exception("Failed to convert");
         }
 
-        var format = GetPoseFormat(Session.Options.MeshFormat);
+        if (!poseAsset.Skeleton.TryLoad<USkeleton>(out var skeleton))
+            throw new ArgumentException(
+                $"Pose asset '{poseAsset.GetPathName()}' has no resolvable target skeleton.",
+                nameof(poseAsset));
+
+        var format = GetPoseFormat(Session.Options.MeshFormat, skeleton);
         return [format.Build(ObjectName, ObjectPath, Session.Options, convertedPoseAsset)];
     }
 
-    private IPoseExportFormat GetPoseFormat(EMeshFormat format) => format switch
+    private IPoseExportFormat GetPoseFormat(EMeshFormat format, USkeleton skeleton) => format switch
     {
-        EMeshFormat.UEFormat => new UEFormatPoseFormat(),
+        EMeshFormat.UEFormat => new UEFormatPoseFormat(
+            poseAsset.GetPathName(),
+            FModelSkeletonIdentity.FromSkeleton(skeleton)),
         _ => throw new NotSupportedException($"Pose asset export does not support format {format}. Available formats: {string.Join(", ", "UEFormat")}")
     };
 }

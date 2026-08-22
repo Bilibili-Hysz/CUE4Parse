@@ -1,3 +1,4 @@
+using System;
 using CUE4Parse.UE4.Writers;
 using CUE4Parse_Conversion.Writers.UEFormat.Structs;
 
@@ -7,38 +8,61 @@ public static class FModelSkeletonExtensionWriter
 {
     private const byte ExtensionVersion = 1;
 
+    public static void WriteModelIdentity(
+        FDataAttributeSet root,
+        FModelSkeletonIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(identity);
+
+        root.AddAttribute("FMODEL_SKELETON_IDENTITY", attribute =>
+        {
+            WriteEnvelope(attribute, 1);
+            attribute.Write(ExtensionVersion);
+            WriteIdentity(attribute, identity);
+        });
+    }
+
     public static void WriteTargetSkeleton(
-        FArchiveWriter archive,
+        FDataAttributeSet root,
         string sourceAnimationPath,
         FModelSkeletonIdentity identity)
     {
-        WriteTarget(archive, sourceAnimationPath, identity);
+        WriteTarget(root, sourceAnimationPath, identity);
     }
 
     public static void WriteTargetPose(
-        FArchiveWriter archive,
+        FDataAttributeSet root,
         string sourcePosePath,
         FModelSkeletonIdentity identity)
     {
-        WriteTarget(archive, sourcePosePath, identity);
+        WriteTarget(root, sourcePosePath, identity);
     }
 
     private static void WriteTarget(
-        FArchiveWriter archive,
+        FDataAttributeSet root,
         string sourceObjectPath,
         FModelSkeletonIdentity identity)
     {
-        ArgumentNullException.ThrowIfNull(archive);
+        ArgumentNullException.ThrowIfNull(root);
         sourceObjectPath = FModelSkeletonIdentity.NormalizeLogicalUnrealPath(
             sourceObjectPath,
             nameof(sourceObjectPath));
         ArgumentNullException.ThrowIfNull(identity);
 
-        using var chunk = new FDataChunk("FMODEL_TARGET_SKELETON", 1);
-        chunk.Write(ExtensionVersion);
-        chunk.WriteFString(sourceObjectPath);
-        WriteIdentity(chunk, identity);
-        chunk.Serialize(archive);
+        root.AddAttribute("FMODEL_TARGET_SKELETON", attribute =>
+        {
+            WriteEnvelope(attribute, 1);
+            attribute.Write(ExtensionVersion);
+            attribute.WriteFString(sourceObjectPath);
+            WriteIdentity(attribute, identity);
+        });
+    }
+
+    private static void WriteEnvelope(FArchiveWriter archive, int arraySize)
+    {
+        archive.Write(ExtensionVersion);
+        archive.Write(arraySize);
     }
 
     private static void WriteIdentity(FArchiveWriter archive, FModelSkeletonIdentity identity)

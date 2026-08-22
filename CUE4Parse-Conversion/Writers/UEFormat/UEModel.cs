@@ -17,23 +17,45 @@ public sealed class UEModel : UEFormatExport
 {
     protected override string Identifier => "UEMODEL";
 
-    public UEModel(string name, string objectPath, StaticMeshDto mesh, ExportOptions options, Func<MeshLodDto<MeshVertex>, bool>? predicate = null)
+    public UEModel(
+        string name,
+        string objectPath,
+        StaticMeshDto mesh,
+        ExportOptions options,
+        Func<MeshLodDto<MeshVertex>, bool>? predicate = null,
+        Action<FDataAttributeSet>? extensionBuilder = null)
         : base(name, objectPath, options)
     {
         WriteRoot(root =>
         {
             WriteLods(root, FilterLods(mesh.LODs, predicate), WriteCommonMesh);
             WriteCollision(root, mesh);
+            extensionBuilder?.Invoke(root);
         });
     }
 
-    public UEModel(string name, string objectPath, SkeletonDto skeleton, ExportOptions options)
+    public UEModel(
+        string name,
+        string objectPath,
+        SkeletonDto skeleton,
+        ExportOptions options,
+        Action<FDataAttributeSet>? extensionBuilder = null)
         : base(name, objectPath, options)
     {
-        WriteRoot(root => WriteSkeleton(root, skeleton, options.SocketFormat != ESocketFormat.None));
+        WriteRoot(root =>
+        {
+            WriteSkeleton(root, skeleton, options.SocketFormat != ESocketFormat.None);
+            extensionBuilder?.Invoke(root);
+        });
     }
 
-    public UEModel(string name, string objectPath, SkeletalMeshDto mesh, ExportOptions options, Func<MeshLodDto<SkinnedMeshVertex>, bool>? predicate = null)
+    public UEModel(
+        string name,
+        string objectPath,
+        SkeletalMeshDto mesh,
+        ExportOptions options,
+        Func<MeshLodDto<SkinnedMeshVertex>, bool>? predicate = null,
+        Action<FDataAttributeSet>? extensionBuilder = null)
         : base(name, objectPath, options)
     {
         WriteRoot(root =>
@@ -46,6 +68,7 @@ public sealed class UEModel : UEFormatExport
             });
 
             WriteSkeleton(root, mesh, options.SocketFormat != ESocketFormat.None);
+            extensionBuilder?.Invoke(root);
         });
     }
 

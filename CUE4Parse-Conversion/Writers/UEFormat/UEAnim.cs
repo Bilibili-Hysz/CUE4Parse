@@ -14,8 +14,29 @@ public sealed class UEAnim : UEFormatExport
     protected override string Identifier => "UEANIM";
 
     public UEAnim(string name, string objectPath, CAnimSet animSet, int sequenceIndex, ExportOptions options)
+        : this(name, objectPath, animSet, sequenceIndex, options, null, null)
+    {
+    }
+
+    /// <summary>
+    /// Writes a standard V10 animation and, when both FModel values are supplied,
+    /// appends the additive target-skeleton attribute to the same root envelope.
+    /// Supplying only one value is rejected so an incomplete provenance record is
+    /// never emitted.
+    /// </summary>
+    public UEAnim(
+        string name,
+        string objectPath,
+        CAnimSet animSet,
+        int sequenceIndex,
+        ExportOptions options,
+        string? sourceAnimationPath,
+        FModelSkeletonIdentity? targetSkeleton)
         : base(name, objectPath, options)
     {
+        if ((sourceAnimationPath is null) != (targetSkeleton is null))
+            throw new ArgumentException("FModel animation provenance requires both source path and target skeleton identity.");
+
         var sequence = animSet.Sequences[sequenceIndex];
         var original = sequence.OriginalSequence;
 
@@ -26,6 +47,9 @@ public sealed class UEAnim : UEFormatExport
 
             if (original.CompressedCurveData?.FloatCurves is { Length: > 0 } floatCurves)
                 WriteCurves(root, floatCurves, sequence.FramesPerSecond);
+
+            if (sourceAnimationPath is not null)
+                FModelSkeletonExtensionWriter.WriteTargetSkeleton(root, sourceAnimationPath, targetSkeleton!);
         });
     }
 

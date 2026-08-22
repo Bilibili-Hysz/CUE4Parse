@@ -6,7 +6,9 @@ using CUE4Parse.UE4.Writers;
 
 namespace CUE4Parse_Conversion.Formats.Animations;
 
-public sealed class UEFormatAnimFormat : IAnimExportFormat
+public sealed class UEFormatAnimFormat(
+    string? sourceAnimationPath = null,
+    FModelSkeletonIdentity? targetSkeleton = null) : IAnimExportFormat
 {
     public string DisplayName => "UEFormat (ueanim)";
 
@@ -16,7 +18,7 @@ public sealed class UEFormatAnimFormat : IAnimExportFormat
         for (var i = 0; i < results.Capacity; i++)
         {
             using var ar = new FArchiveWriter();
-            new UEAnim(objectName, objectPath, animSet, i, options).Save(ar);
+            new UEAnim(objectName, objectPath, animSet, i, options, sourceAnimationPath, targetSkeleton).Save(ar);
 
             var suffix = i == 0 ? "" : $"_SEQ{i}";
             results.Add(new ExportFile("ueanim", ar.GetBuffer(), suffix));

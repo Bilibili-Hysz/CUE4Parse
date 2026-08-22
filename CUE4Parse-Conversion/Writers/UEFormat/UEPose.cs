@@ -12,12 +12,33 @@ public sealed class UEPose : UEFormatExport
     protected override string Identifier => "UEPOSE";
 
     public UEPose(string name, string objectPath, CPoseAsset poseAsset, ExportOptions options)
+        : this(name, objectPath, poseAsset, options, null, null)
+    {
+    }
+
+    /// <summary>
+    /// Writes a standard V10 pose asset and optionally adds the FModel target
+    /// skeleton provenance attribute to its root attribute set.
+    /// </summary>
+    public UEPose(
+        string name,
+        string objectPath,
+        CPoseAsset poseAsset,
+        ExportOptions options,
+        string? sourcePosePath,
+        FModelSkeletonIdentity? targetSkeleton)
         : base(name, objectPath, options)
     {
+        if ((sourcePosePath is null) != (targetSkeleton is null))
+            throw new ArgumentException("FModel pose provenance requires both source path and target skeleton identity.");
+
         WriteRoot(root =>
         {
             root.AddAttribute("POSES", attr => attr.WriteArray(poseAsset.Poses, WritePose));
             root.AddAttribute("CURVES", attr => attr.WriteArray(poseAsset.CurveNames, attr.WriteFString));
+
+            if (sourcePosePath is not null)
+                FModelSkeletonExtensionWriter.WriteTargetPose(root, sourcePosePath, targetSkeleton!);
         });
     }
 
