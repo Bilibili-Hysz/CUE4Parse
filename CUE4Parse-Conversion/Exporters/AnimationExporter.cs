@@ -12,11 +12,7 @@ public sealed class AnimationExporter(UAnimationAsset animation) : ExporterBase(
     {
         Log.Debug("Converting animation to {Format}", Session.Options.MeshFormat);
 
-        var format = GetAnimFormat(
-            Session.Options.MeshFormat,
-            animation.Skeleton.TryLoad<USkeleton>(out var skeleton)
-                ? skeleton
-                : throw new ArgumentException("Animation asset has no resolvable target skeleton.", nameof(animation)));
+        var format = GetAnimFormat(Session.Options.MeshFormat);
         return format switch
         {
             // TODO: should we extend IAnimExportFormat to handle these for all writers?
@@ -28,12 +24,11 @@ public sealed class AnimationExporter(UAnimationAsset animation) : ExporterBase(
         };
     }
 
-    private IAnimExportFormat GetAnimFormat(EMeshFormat format, USkeleton skeleton) => format switch
+    private IAnimExportFormat GetAnimFormat(EMeshFormat format) => format switch
     {
+        EMeshFormat.UEFormat when Session.Extension?.TryCreateAnimationFormat(animation, format, Session) is { } externalFormat => externalFormat,
         EMeshFormat.ActorX => new ActorXAnimFormat(),
-        EMeshFormat.UEFormat => new UEFormatAnimFormat(
-            animation.GetPathName(),
-            FModelSkeletonIdentity.FromSkeleton(skeleton)),
+        EMeshFormat.UEFormat => new UEFormatAnimFormat(),
         EMeshFormat.USD => new UsdAnimFormat(),
         _ => throw new NotSupportedException($"Animation export does not support format {format}. Available formats: {string.Join(", ", "ActorX", "UEFormat", "USD")}"),
     };

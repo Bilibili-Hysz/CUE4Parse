@@ -6,7 +6,10 @@ namespace CUE4Parse_Conversion.Writers.UEFormat;
 
 public static class FModelSkeletonExtensionWriter
 {
-    private const byte ExtensionVersion = 1;
+    // This is the semantic payload version. The containing V10 attribute has
+    // a separate envelope version written by the helpers below.
+    private const byte IdentityPayloadVersion = 1;
+    private const byte AttributeEnvelopeVersion = 1;
 
     public static void WriteModelIdentity(
         FDataAttributeSet root,
@@ -18,7 +21,7 @@ public static class FModelSkeletonExtensionWriter
         root.AddAttribute("FMODEL_SKELETON_IDENTITY", attribute =>
         {
             WriteEnvelope(attribute, 1);
-            attribute.Write(ExtensionVersion);
+            attribute.Write(IdentityPayloadVersion);
             WriteIdentity(attribute, identity);
         });
     }
@@ -53,7 +56,7 @@ public static class FModelSkeletonExtensionWriter
         root.AddAttribute("FMODEL_TARGET_SKELETON", attribute =>
         {
             WriteEnvelope(attribute, 1);
-            attribute.Write(ExtensionVersion);
+            attribute.Write(IdentityPayloadVersion);
             attribute.WriteFString(sourceObjectPath);
             WriteIdentity(attribute, identity);
         });
@@ -61,7 +64,7 @@ public static class FModelSkeletonExtensionWriter
 
     private static void WriteEnvelope(FArchiveWriter archive, int arraySize)
     {
-        archive.Write(ExtensionVersion);
+        archive.Write(AttributeEnvelopeVersion);
         archive.Write(arraySize);
     }
 
