@@ -17,7 +17,7 @@ public class FColorVertexBuffer
     {
         Data = [];
     }
-    
+
     public FColorVertexBuffer(FColor[] data)
     {
         Data = data;

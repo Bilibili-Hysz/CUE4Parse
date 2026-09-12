@@ -251,6 +251,8 @@ public class ActorXMesh
         boneHdr.DataCount = numBones;
         boneHdr.DataSize = 120;
         Ar.SerializeChunkHeader(boneHdr, "REFSKELT");
+
+        var parentScales = bones.GetParentScales(); // PSK has no bone scale, see BoneScaleExtensions
         for (var i = 0; i < numBones; i++)
         {
             var numChildren = 0;
@@ -265,7 +267,7 @@ public class ActorXMesh
                 ParentIndex = bones[i].ParentIndex,
                 BonePos = new VJointPosPsk
                 {
-                    Position = bones[i].Transform.Translation,
+                    Position = bones[i].Transform.Translation * parentScales[i],
                     Orientation = bones[i].Transform.Rotation
                 }
             };
@@ -396,9 +398,9 @@ public class ActorXMesh
             default: return [];
         }
     }
-    public void ExportStaticSockets(FPackageIndex[] sockets, List<MeshBoneDto> bones)
+    public void ExportStaticSockets(FPackageIndex[]? sockets, List<MeshBoneDto> bones)
     {
-        if (sockets.Length == 0) return;
+        if (sockets == null || sockets.Length == 0) return;
         switch (Options.SocketFormat)
         {
             case ESocketFormat.Socket:

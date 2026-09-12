@@ -8,10 +8,10 @@ using CUE4Parse.UE4.Assets.Exports.Actor;
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Assets.Exports.Component.Landscape;
 using CUE4Parse.UE4.Assets.Exports.Component.SplineMesh;
+using CUE4Parse.UE4.Assets.Exports.Engine;
 using CUE4Parse.UE4.Assets.Exports.GeometryCollection;
 using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse.UE4.Assets.Exports.Rig;
-using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Objects.Engine;
@@ -78,7 +78,7 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
     {
         if (export is UTexture
             or UMaterialInterface
-            or USkeletalMesh
+            or USkinnedAsset
             or UStaticMesh
             or UGeometryCollection
             or USkeleton
@@ -102,7 +102,7 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
         {
             UTexture texture => new TextureExporter(texture),
             UMaterialInterface material => new MaterialExporter(material),
-            USkeletalMesh skeletalMesh => new SkeletalMeshExporter(skeletalMesh),
+            USkinnedAsset skinnedAsset => new SkinnedAssetExporter(skinnedAsset),
             UStaticMesh staticMesh => new StaticMeshExporter(staticMesh),
             UGeometryCollection geometryCollection => new GeometryCollectionExporter(geometryCollection),
             USkeleton skeleton => new SkeletonExporter(skeleton),

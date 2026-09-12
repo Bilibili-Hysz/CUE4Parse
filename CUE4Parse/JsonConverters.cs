@@ -845,8 +845,17 @@ public class FPackageFileSummaryConverter : JsonConverter<FPackageFileSummary>
         writer.WritePropertyName(nameof(value.FileVersionLicenseeUE));
         writer.WriteValue(value.FileVersionLicenseeUE.ToStringBitfield());
 
-        writer.WritePropertyName("CustomVersions");
-        serializer.Serialize(writer, value.CustomVersionContainer?.Versions);
+        if (value.CustomVersionContainer is not null)
+        {
+            writer.WritePropertyName("CustomVersions");
+            serializer.Serialize(writer, value.CustomVersionContainer?.Versions);
+        }
+
+        if (value.TextureAllocations is not null)
+        {
+            writer.WritePropertyName("TextureAllocations");
+            serializer.Serialize(writer, value.TextureAllocations);
+        }
 
         writer.WritePropertyName(nameof(value.bUnversioned));
         writer.WriteValue(value.bUnversioned);
@@ -1748,7 +1757,7 @@ public class FSkeletalMaterialConverter : JsonConverter<FSkeletalMaterial>
         serializer.Serialize(writer, value.MaterialSlotName);
 
         writer.WritePropertyName("Material");
-        serializer.Serialize(writer, value.Material);
+        serializer.Serialize(writer, value.MaterialInterface);
 
         writer.WritePropertyName("ImportedMaterialSlotName");
         serializer.Serialize(writer, value.ImportedMaterialSlotName);

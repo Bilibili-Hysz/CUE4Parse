@@ -24,9 +24,7 @@ public class FManagedArrayCollection
     public bool TryGetAttributeValue<T>(string attribute, FName group, [NotNullWhen(true)] out T[]? value) =>
         TryGetAttributeValue(new FName(attribute), group, out value);
 
-    public bool TryGetAttributeValue<T>(FName attribute, FName group, [NotNullWhen(true)] out T[]? value) =>
-        TryGetAttributeValue(new FKeyType(attribute, group), out value);
-
+    public bool TryGetAttributeValue<T>(FName attribute, FName group, [NotNullWhen(true)] out T[]? value) => TryGetAttributeValue(new FKeyType(attribute, group), out value);
     public bool TryGetAttributeValue<T>(FKeyType key, [NotNullWhen(true)] out T[]? value)
     {
         value = FindAttributeValue<T>(key, out _);
@@ -39,9 +37,7 @@ public class FManagedArrayCollection
     public T[] GetAttributeValue<T>(string attribute, FName group) =>
         GetAttributeValue<T>(new FName(attribute), group);
 
-    public T[] GetAttributeValue<T>(FName attribute, FName group) =>
-        GetAttributeValue<T>(new FKeyType(attribute, group));
-
+    public T[] GetAttributeValue<T>(FName attribute, FName group) => GetAttributeValue<T>(new FKeyType(attribute, group));
     public T[] GetAttributeValue<T>(FKeyType key)
     {
         if (FindAttributeValue<T>(key, out var exists) is { } value) return value;
