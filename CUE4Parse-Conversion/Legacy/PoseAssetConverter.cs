@@ -17,10 +17,13 @@ public static class PoseAssetConverter
         if (poseDatas is null || poseDatas.Length == 0) return false;
 
         var poseNames = poseContainer.GetPoseNames().ToArray();
-        if (poseNames.Length == 0) return false;
+        if (poseNames.Length == 0 || poseNames.Length != poseDatas.Length) return false;
 
         var boneTrackNames = poseContainer.Tracks;
         if (boneTrackNames.Length == 0) return false;
+
+        if (poseDatas.Any(pose => pose is null || pose.LocalSpacePose is null || pose.CurveData is null))
+            return false;
 
         convertedPoseAsset.CurveNames = [..poseAsset.PoseContainer.Curves.Select(curve => curve.CurveName.Text)];
 
@@ -43,10 +46,18 @@ public static class PoseAssetConverter
             {
                 var boneInfluences = trackBoneInfluences[boneIndex];
                 if (boneInfluences is null) continue;
+                if (boneInfluences.Influences is null) return false;
 
                 var boneName = boneTrackNames[boneIndex];
                 foreach (var influence in boneInfluences.Influences)
                 {
+                    if (influence is null
+                        || influence.PoseIndex < 0
+                        || influence.PoseIndex >= poseDatas.Length
+                        || influence.BoneTransformIndex < 0
+                        || influence.BoneTransformIndex >= poseDatas[influence.PoseIndex].LocalSpacePose.Length)
+                        return false;
+
                     var targetTransform = poseDatas[influence.PoseIndex].LocalSpacePose[influence.BoneTransformIndex];
                     if (!targetTransform.Rotation.IsNormalized) targetTransform.Rotation.Normalize();
 
@@ -68,6 +79,12 @@ public static class PoseAssetConverter
                 var poseData = poseDatas[poseIndex];
                 foreach (var (trackIndex, transformIndex) in poseData.TrackToBufferIndex)
                 {
+                    if (trackIndex < 0
+                        || trackIndex >= boneTrackNames.Length
+                        || transformIndex < 0
+                        || transformIndex >= poseData.LocalSpacePose.Length)
+                        return false;
+
                     var transform = poseData.LocalSpacePose[transformIndex];
                     if (!transform.Rotation.IsNormalized)
                         transform.Rotation.Normalize();

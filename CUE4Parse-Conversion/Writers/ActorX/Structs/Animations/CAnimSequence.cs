@@ -1,5 +1,6 @@
 using CUE4Parse.UE4.Assets.Exports.Animation;
 using CUE4Parse.UE4.Objects.Core.Math;
+using CUE4Parse_Conversion.Writers.UEFormat;
 
 namespace CUE4Parse_Conversion.Writers.ActorX.Structs.Animations
 {
@@ -33,7 +34,10 @@ namespace CUE4Parse_Conversion.Writers.ActorX.Structs.Animations
 
             Name = OriginalSequence.Name;
             NumFrames = OriginalSequence.NumFrames;
-            FramesPerSecond = OriginalSequence.NumFrames / OriginalSequence.SequenceLength * MathF.Max(1, OriginalSequence.RateScale);
+            FramesPerSecond = UEFormatAnimationTiming.ResolveFramesPerSecond(
+                OriginalSequence.NumFrames,
+                OriginalSequence.SequenceLength,
+                OriginalSequence.RateScale);
             IsAdditive = OriginalSequence.AdditiveAnimType != EAdditiveAnimationType.AAT_None;
 
             StartPos = 0.0f;

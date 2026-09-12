@@ -15,5 +15,17 @@ public class FDataAttributeSet : ISerializable
         _attributes.Add(attribute);
     }
 
+    /// <summary>
+    /// Builds a group of attributes off to the side and commits them only when
+    /// the complete callback succeeds.
+    /// </summary>
+    public void AddAttributes(Action<FDataAttributeSet> build)
+    {
+        ArgumentNullException.ThrowIfNull(build);
+        var staged = new FDataAttributeSet();
+        build(staged);
+        _attributes.AddRange(staged._attributes);
+    }
+
     public void Serialize(FArchiveWriter Ar) => Ar.WriteArray(_attributes);
 }

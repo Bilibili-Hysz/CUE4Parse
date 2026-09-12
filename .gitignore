@@ -13,6 +13,9 @@
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
+# Local isolated worktrees
+.worktrees/
+
 # Mono auto generated files
 mono_crash.*
 

@@ -70,7 +70,15 @@ public sealed class UEAnim : UEFormatExport
         if ((sourceAnimationPath is null) != (targetSkeleton is null))
             throw new ArgumentException("FModel animation provenance requires both source path and target skeleton identity.");
 
-        var framesPerSecond = animStreamable.NumFrames / animStreamable.SequenceLength;
+        float? samplingRate = animStreamable.SamplingFrameRate is { } sampling
+            && sampling.Numerator > 0
+            && sampling.Denominator > 0
+                ? sampling.Numerator / (float)sampling.Denominator
+                : null;
+        var framesPerSecond = UEFormatAnimationTiming.ResolveFramesPerSecond(
+            animStreamable.NumFrames,
+            animStreamable.SequenceLength,
+            fallbackRate: samplingRate);
 
         WriteRoot(root =>
         {
