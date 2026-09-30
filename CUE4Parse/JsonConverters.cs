@@ -17,7 +17,7 @@ using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Assets.Exports.Wwise;
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Objects.Properties;
-using CUE4Parse.UE4.CriWare.Readers;
+using CUE4Parse.UE4.Criware.Readers;
 using CUE4Parse.UE4.FMod;
 using CUE4Parse.UE4.FMod.Objects;
 using CUE4Parse.UE4.Kismet;
@@ -2630,6 +2630,12 @@ public class FAssetPackageDataConverter : JsonConverter<FAssetPackageData>
         {
             writer.WritePropertyName("CookedHash");
             serializer.Serialize(writer, value.CookedHash);
+        }
+
+        if (value.SourceFileMD5 != null)
+        {
+            writer.WritePropertyName("SourceFileMD5");
+            serializer.Serialize(writer, value.SourceFileMD5);
         }
 
         if (value.FileVersionUE.FileVersionUE4 != 0 || value.FileVersionUE.FileVersionUE5 != 0)

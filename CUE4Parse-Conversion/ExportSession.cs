@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using CUE4Parse.FileProvider;
 using CUE4Parse.FileProvider.Objects;
+using CUE4Parse.GameTypes.Nascar.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Actor;
 using CUE4Parse.UE4.Assets.Exports.Animation;
@@ -10,6 +11,7 @@ using CUE4Parse.UE4.Assets.Exports.Component.Landscape;
 using CUE4Parse.UE4.Assets.Exports.Component.SplineMesh;
 using CUE4Parse.UE4.Assets.Exports.Engine;
 using CUE4Parse.UE4.Assets.Exports.GeometryCollection;
+using CUE4Parse.UE4.Assets.Exports.Houdini;
 using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse.UE4.Assets.Exports.Rig;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
@@ -17,6 +19,7 @@ using CUE4Parse.UE4.Assets.Exports.Texture;
 using CUE4Parse.UE4.Objects.Engine;
 using CUE4Parse.UE4.Objects.Engine.Animation;
 using CUE4Parse_Conversion.Exporters;
+using CUE4Parse_Conversion.Exporters.Custom;
 using CUE4Parse_Conversion.Options;
 
 namespace CUE4Parse_Conversion;
@@ -80,6 +83,8 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             or UMaterialInterface
             or USkinnedAsset
             or UStaticMesh
+            or UHoudiniAsset
+            or UIRMesh
             or UGeometryCollection
             or USkeleton
             or UPoseAsset
@@ -104,6 +109,8 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             UMaterialInterface material => new MaterialExporter(material),
             USkinnedAsset skinnedAsset => new SkinnedAssetExporter(skinnedAsset),
             UStaticMesh staticMesh => new StaticMeshExporter(staticMesh),
+            UHoudiniAsset houdiniAsset => new HoudiniAssetExporter(houdiniAsset),
+            UIRMesh irMesh => new IRMeshExporter(irMesh),
             UGeometryCollection geometryCollection => new GeometryCollectionExporter(geometryCollection),
             USkeleton skeleton => new SkeletonExporter(skeleton),
             UPoseAsset poseAsset => new PoseAssetExporter(poseAsset),
