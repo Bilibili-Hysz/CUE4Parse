@@ -84,6 +84,7 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             or USkinnedAsset
             or UStaticMesh
             or UHoudiniAsset
+            or UHoudiniStaticMesh
             or UIRMesh
             or UGeometryCollection
             or USkeleton
@@ -110,6 +111,7 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             USkinnedAsset skinnedAsset => new SkinnedAssetExporter(skinnedAsset),
             UStaticMesh staticMesh => new StaticMeshExporter(staticMesh),
             UHoudiniAsset houdiniAsset => new HoudiniAssetExporter(houdiniAsset),
+            UHoudiniStaticMesh houdiniMesh => new HoudiniStaticMeshExporter(houdiniMesh),
             UIRMesh irMesh => new IRMeshExporter(irMesh),
             UGeometryCollection geometryCollection => new GeometryCollectionExporter(geometryCollection),
             USkeleton skeleton => new SkeletonExporter(skeleton),
