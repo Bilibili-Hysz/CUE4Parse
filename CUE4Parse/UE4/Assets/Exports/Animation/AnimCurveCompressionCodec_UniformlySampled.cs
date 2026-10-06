@@ -35,8 +35,6 @@ public class UAnimCurveCompressionCodec_UniformlySampled : UAnimCurveCompression
         var floatCurves = new FFloatCurve[numCurves];
         for (int curveIndex = 0, constantCurveIndex = 0, animatedCurveIndex = 0; curveIndex < numCurves; curveIndex++)
         {
-            var curveKeys = animatedSamplesSpan.Slice(animatedCurveIndex * numSamples, numSamples);
-
             var floatCurve = new FFloatCurve
             {
                 CurveName = names[curveIndex].DisplayName,
@@ -62,6 +60,7 @@ public class UAnimCurveCompressionCodec_UniformlySampled : UAnimCurveCompression
             }
             else
             {
+                var curveKeys = animatedSamplesSpan.Slice(animatedCurveIndex * numSamples, numSamples);
                 for (var sampleIndex = 0; sampleIndex < numSamples; sampleIndex++)
                 {
                     floatCurve.FloatCurve.Keys[sampleIndex] = new FRichCurveKey
