@@ -20,6 +20,7 @@ using CUE4Parse.UE4.Objects.Engine;
 using CUE4Parse.UE4.Objects.Engine.Animation;
 using CUE4Parse_Conversion.Exporters;
 using CUE4Parse_Conversion.Exporters.Custom;
+using CUE4Parse_Conversion.Dto;
 using CUE4Parse_Conversion.Options;
 
 namespace CUE4Parse_Conversion;
@@ -83,7 +84,6 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             or UMaterialInterface
             or USkinnedAsset
             or UStaticMesh
-            or UHoudiniAsset
             or UHoudiniStaticMesh
             or UIRMesh
             or UGeometryCollection
@@ -94,10 +94,15 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             or UWorld
             or ALandscapeProxy
             or ULandscapeComponent
-            or USplineMeshComponent)
+            or USplineMeshComponent
+            or USwfMovie
+            or UWwiseAssetLibraryGroup)
         {
             return;
         }
+
+        if (EmbeddedFilesDto.Supports(export))
+            return;
 
         throw new NotSupportedException($"Could not create exporter for export of type '{export.GetType().Name}'.");
     }
@@ -110,7 +115,6 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             UMaterialInterface material => new MaterialExporter(material),
             USkinnedAsset skinnedAsset => new SkinnedAssetExporter(skinnedAsset),
             UStaticMesh staticMesh => new StaticMeshExporter(staticMesh),
-            UHoudiniAsset houdiniAsset => new HoudiniAssetExporter(houdiniAsset),
             UHoudiniStaticMesh houdiniMesh => new HoudiniStaticMeshExporter(houdiniMesh),
             UIRMesh irMesh => new IRMeshExporter(irMesh),
             UGeometryCollection geometryCollection => new GeometryCollectionExporter(geometryCollection),
@@ -122,6 +126,7 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
             ALandscapeProxy landscape => new LandscapeMeshExporter(landscape),
             ULandscapeComponent landscape => new LandscapeMeshExporter2(landscape),
             USplineMeshComponent spline => new SplineMeshExporter(spline),
+            _ when EmbeddedFilesDto.Supports(export) => new EmbeddedFilesExporter(export),
             _ => throw new NotSupportedException($"Could not create exporter for export of type '{export.GetType().Name}'.")
         };
     }
