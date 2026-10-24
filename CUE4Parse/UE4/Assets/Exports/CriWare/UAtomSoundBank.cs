@@ -15,3 +15,4 @@ public class UAtomSoundBank : UObject
         if (bCooked) RawData = new FByteBulkData(Ar);
     }
 }
+

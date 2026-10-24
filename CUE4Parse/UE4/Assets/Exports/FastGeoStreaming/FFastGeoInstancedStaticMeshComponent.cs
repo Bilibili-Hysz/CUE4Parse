@@ -58,3 +58,4 @@ public class FFastGeoInstancedStaticMeshComponent : FFastGeoStaticMeshComponentB
         PerInstanceRandomIDs = Ar.Game >= GAME_UE5_8 ? Ar.ReadBulkArray<float>() : [] ;
     }
 }
+

@@ -217,7 +217,8 @@ public class StaticMeshDto : MeshDto<MeshVertex>
             ParseNaniteResources(this, nanite, naniteFormat);
         }
 
-        Bounds = LODs.FirstOrDefault()?.CalculateLodBounds() ?? new FBox(FVector.ZeroVector, FVector.OneVector);
+        Bounds = LODs.First().CalculateLodBounds();
+
         SetLodSuffixes();
     }
 
@@ -264,6 +265,7 @@ public class StaticMeshDto : MeshDto<MeshVertex>
         if (shouldParseNanite && mesh.RenderData?.NaniteResources is { PageStreamingStates.Length: > 0 } nanite)
         {
             ParseNaniteResources(this, nanite, naniteFormat);
+
             if (nanite.MeshBounds is { } meshBounds)
                 bounds = meshBounds.GetBox();
         }
@@ -274,6 +276,7 @@ public class StaticMeshDto : MeshDto<MeshVertex>
 
         bounds ??= LODs.FirstOrDefault()?.CalculateLodBounds();
         Bounds = bounds ?? new FBox(FVector.ZeroVector, FVector.OneVector);
+
         SetLodSuffixes();
     }
 
@@ -327,18 +330,18 @@ public class StaticMeshDto : MeshDto<MeshVertex>
             // CustomData[3] = plane
         }
 
-        if (resources is not null && description is not null)
+        if (resources != null && description != null)
         {
-            LODs.Add(MeshLodDto<MeshVertex>.FromRenderData(this, 0u, resources, description.Value, collection));
+            LODs.Add(MeshLodDto<SkinnedMeshVertex>.FromRenderData(this, 0u, resources, description.Value, collection));
             return;
         }
 
-        if (collection is not null &&
+        if (collection != null &&
             collection.GroupInfo.TryGetValue("Vertices", out var vertices) && vertices.Size > 0 &&
             collection.GroupInfo.TryGetValue("Faces", out var faces) && faces.Size > 0 &&
             collection.GroupInfo.TryGetValue("Material", out var material) && material.Size > 0)
         {
-            LODs.Add(MeshLodDto<MeshVertex>.FromArrayCollection(this, 0u, collection));
+            LODs.Add(MeshLodDto<SkinnedMeshVertex>.FromArrayCollection(this, 0u, collection));
             return;
         }
 

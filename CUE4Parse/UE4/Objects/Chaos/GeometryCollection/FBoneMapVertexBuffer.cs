@@ -1,8 +1,6 @@
 ﻿using CUE4Parse.UE4.Readers;
 using Newtonsoft.Json;
 
-using Newtonsoft.Json;
-
 namespace CUE4Parse.UE4.Objects.Chaos.GeometryCollection;
 
 public class FBoneMapVertexBuffer

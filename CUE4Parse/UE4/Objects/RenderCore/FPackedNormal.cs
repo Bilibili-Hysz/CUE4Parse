@@ -27,6 +27,7 @@ namespace CUE4Parse.UE4.Objects.RenderCore
             Data = data;
         }
 
+
         public FPackedNormal(FVector vector) : this(vector.X, vector.Y, vector.Z, 0f) { }
 
         public FPackedNormal(FVector4 vector) : this(vector.X, vector.Y, vector.Z, vector.W) { }
@@ -46,7 +47,7 @@ namespace CUE4Parse.UE4.Objects.RenderCore
             return (byte) (Data >> 24) / 127.0f;
         }
 
-        private static uint Pack(float value) => (uint) Math.Clamp((int) MathF.Round((value + 1f) * 127.5f), 0, 255);
+        private uint Pack(float value) => (uint) Math.Clamp((int) MathF.Round((value + 1f) * 127.5f), 0, 255);
 
         public static explicit operator FVector(FPackedNormal packedNormal) => new(packedNormal.X, packedNormal.Y, packedNormal.Z);
         public static implicit operator FVector4(FPackedNormal packedNormal) => new(packedNormal.X, packedNormal.Y, packedNormal.Z, packedNormal.W);
