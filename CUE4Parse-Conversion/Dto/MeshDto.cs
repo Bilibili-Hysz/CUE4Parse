@@ -198,7 +198,11 @@ public class StaticMeshDto : MeshDto<MeshVertex>
     public FPackageIndex? BodySetup { get; private set; }
     public sealed override FBox Bounds { get; protected init; }
 
-    protected StaticMeshDto(UObject owner) : base(owner)
+    /// <summary>
+    /// Owner-only constructor. Public because the pinned Snooper submodule still builds a
+    /// placeholder DTO from the owner alone; the upstream shape it replaced was public too.
+    /// </summary>
+    public StaticMeshDto(UObject owner) : base(owner)
     {
 
     }
@@ -207,6 +211,44 @@ public class StaticMeshDto : MeshDto<MeshVertex>
     {
 
     }
+
+    // ---------------------------------------------------------------------------------
+    // Compatibility overloads for the pinned Snooper submodule.
+    //
+    // CUE4Parse 1.2.2.202611 replaced the EMeshQuality parameter with a required
+    // ExportOptions on every mesh DTO constructor. FModel upstream/dev still pins
+    // Snooper at 9d44219c, whose PrimitiveDescriptor calls the old shapes, and the
+    // CUE4Parse commit that FModel pins (85495b5e) still has them too. Without these
+    // overloads the desktop build fails in Snooper rather than in our own code.
+    //
+    // They are additive and forward to the ExportOptions constructors, so the export
+    // path keeps one implementation. Remove them once Snooper is bumped to a revision
+    // that passes ExportOptions.
+    // ---------------------------------------------------------------------------------
+
+    private static ExportOptions CompatibilityOptions(
+        EMeshQuality quality = EMeshQuality.All,
+        ENaniteMeshFormat naniteFormat = ENaniteMeshFormat.NoNanite,
+        bool exportMorphTargets = false)
+        => new(meshQuality: quality, naniteMeshFormat: naniteFormat, exportMorphTargets: exportMorphTargets);
+
+    public StaticMeshDto(UObject owner, MeshMaterialDto[] materials, FNaniteResources nanite, ENaniteMeshFormat naniteFormat = ENaniteMeshFormat.NoNanite)
+        : this(owner, materials, nanite, CompatibilityOptions(naniteFormat: naniteFormat)) { }
+
+    public StaticMeshDto(UStaticMesh mesh, EMeshQuality quality = EMeshQuality.All, ENaniteMeshFormat naniteFormat = ENaniteMeshFormat.NoNanite)
+        : this(mesh, CompatibilityOptions(quality, naniteFormat)) { }
+
+    public StaticMeshDto(UGeometryCollection mesh, ENaniteMeshFormat naniteFormat = ENaniteMeshFormat.NoNanite)
+        : this(mesh, CompatibilityOptions(naniteFormat: naniteFormat)) { }
+
+    public StaticMeshDto(USplineMeshComponent spline, EMeshQuality quality = EMeshQuality.All)
+        : this(spline, CompatibilityOptions(quality)) { }
+
+    public StaticMeshDto(UIRMesh mesh, int meshIndex)
+        : this(mesh, meshIndex, CompatibilityOptions()) { }
+
+    public StaticMeshDto(UHoudiniStaticMesh mesh)
+        : this(mesh, CompatibilityOptions()) { }
 
     /// <summary>
     /// Builds a static mesh DTO purely from nanite cluster data
@@ -224,8 +266,7 @@ public class StaticMeshDto : MeshDto<MeshVertex>
     }
 
     public StaticMeshDto(UStaticMesh mesh, ExportOptions options, USplineMeshComponent? spline = null) : base(mesh)
-    {
-        ArgumentNullException.ThrowIfNull(mesh.RenderData?.LODs, "Mesh has no LOD data");
+    {        ArgumentNullException.ThrowIfNull(mesh.RenderData?.LODs, "Mesh has no LOD data");
         ArgumentNullException.ThrowIfNull(mesh.RenderData?.Bounds, "Mesh has no bounds");
 
         Bounds = mesh.RenderData.Bounds.GetBox();
@@ -417,6 +458,20 @@ public sealed class SkeletalMeshDto : SkeletonDto
     public FPackageIndex? PhysicsAsset { get; private set; }
     public FPackageIndex[]? MorphTargets { get; private set; }
     public FPackageIndex[]? AssetUserData { get; private set; }
+
+    /// <summary>
+    /// Compatibility overload for the pinned Snooper submodule; see the note on the
+    /// StaticMeshDto compatibility overloads. Remove when Snooper passes ExportOptions.
+    /// </summary>
+    public SkeletalMeshDto(
+        USkinnedAsset mesh,
+        EMeshQuality quality = EMeshQuality.All,
+        ENaniteMeshFormat naniteFormat = ENaniteMeshFormat.NoNanite,
+        bool exportMorphTargets = false)
+        : this(mesh, new ExportOptions(
+            meshQuality: quality,
+            naniteMeshFormat: naniteFormat,
+            exportMorphTargets: exportMorphTargets)) { }
 
     public SkeletalMeshDto(USkinnedAsset mesh, ExportOptions options) : base(mesh)
     {
