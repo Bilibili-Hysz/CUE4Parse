@@ -31,6 +31,19 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 {
     private const int MaxActiveTaskCount = 64;
 
+    /// <summary>
+    /// A session that already knows its options, used by the GLTF material path where the
+    /// format object is built outside a run. It records the options so <see cref="Cache"/>
+    /// and <see cref="Options"/> are usable immediately, but no run is started: the queue,
+    /// the base directory and the running flag stay untouched until <see cref="RunAsync"/>.
+    /// </summary>
+    internal ExportSession(ExportOptions options) : this((Action<StreamingLevelFilterArgs, CancellationToken>?) null)
+    {
+        _options = options;
+        _cache = new ExportSessionCache();
+        AttachMaterials = options.MeshFormat is EMeshFormat.Gltf2 or EMeshFormat.USD && options.ExportMaterials;
+    }
+
     internal readonly Action<StreamingLevelFilterArgs, CancellationToken>? _streamingLevelFilter = streamingLevelFilter;
     internal readonly SemaphoreSlim _streamingLevelFilterLock = new(1, 1);
 
@@ -52,6 +65,18 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 
     private ExportOptions? _options;
     internal ExportOptions Options => _options ?? throw new InvalidOperationException("Session is not currently running.");
+
+    // Parsed-material and saved-texture reuse for one run. Adopted from upstream: the GLTF
+    // and USD material paths resolve materials through this cache, so it must exist even
+    // though our scheduler does not need it. It only lives while the session is running.
+    private ExportSessionCache? _cache;
+    public ExportSessionCache Cache => _cache ?? throw new InvalidOperationException("Session is not currently running.");
+
+    /// <summary>Whether the current run attaches materials into the exported files.</summary>
+    public bool AttachMaterials { get; private set; }
+
+    public PbrMaterialDto ResolveMaterial(UMaterialInterface material, EMaterialDepth? depth = null)
+        => Cache.ResolveMaterial(material, depth ?? Options.MaterialDepth);
 
     private readonly ExportTaskQueue _taskQueue = new();
     private readonly ExportResourceManager _resourceManager = new();
@@ -223,6 +248,8 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
 
             _baseDirectory = new DirectoryInfo(baseDirectory);
             _options = options;
+            _cache = new ExportSessionCache();
+            AttachMaterials = options.MeshFormat is EMeshFormat.Gltf2 or EMeshFormat.USD && options.ExportMaterials;
             _taskQueue.BeginRun();
             Volatile.Write(ref _running, 1);
         }
@@ -261,6 +288,9 @@ public sealed class ExportSession(Action<StreamingLevelFilterArgs, CancellationT
                 // subscriber must never leave active options, paths or queue roots.
                 _options = null;
                 _baseDirectory = null;
+                AttachMaterials = false;
+                _cache?.Clear();
+                _cache = null;
                 Volatile.Write(ref _running, 0);
 
                 SafeOnPropertyChanged(nameof(TotalQueued));

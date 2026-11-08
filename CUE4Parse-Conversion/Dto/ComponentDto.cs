@@ -1,5 +1,7 @@
-﻿using CUE4Parse.GameTypes.Nascar.Assets.Exports;
+using CUE4Parse.GameTypes.Nascar.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports;
+using CUE4Parse.GameTypes.DBD.Assets.Exports.Components;
+using CUE4Parse_Conversion.Dto.Custom.DBD;
 using CUE4Parse.UE4.Assets.Exports.Actor;
 using CUE4Parse.UE4.Assets.Exports.Component;
 using CUE4Parse.UE4.Assets.Exports.Component.Landscape;
@@ -36,13 +38,13 @@ public class ComponentDto : LightObjectDto
             {
                 USceneComponent scene => scene switch
                 {
-                    UStaticMeshComponent sm when sm.TryGetValue<FPackageIndex>(out var mesh, "StaticMesh") => sm switch
+                    UStaticMeshComponent sm when sm.GetStaticMesh() is { IsNull: false } mesh => sm switch
                     {
                         UInstancedStaticMeshComponent ism => new InstancedStaticMeshComponentDto(mesh, ism, owner),
                         USplineMeshComponent spline => new SplineMeshComponentDto(mesh, spline, owner),
                         _ => new StaticMeshComponentDto(mesh, sm, owner)
                     },
-                    USkeletalMeshComponent sk when sk.TryGetValue<FPackageIndex>(out var mesh, "SkeletalMesh", "SkinnedAsset") => new SkeletalMeshComponentDto(mesh, sk, owner),
+                    USkeletalMeshComponent sk when sk.GetSkeletalMesh() is { IsNull: false } mesh => new SkeletalMeshComponentDto(mesh, sk, owner),
                     UGeometryCollectionComponent { RestCollection: not null } gc => new GeometryCollectionComponentDto(gc.RestCollection, gc, owner),
                     ULandscapeComponent landscape => new LandscapeMeshComponentDto(landscape, owner),
                     ULandscapeSplinesComponent splines => new LandscapeSplinesComponentDto(splines, owner),
@@ -64,12 +66,13 @@ public class ComponentDto : LightObjectDto
                         UDirectionalLightComponent directionalLight => new DirectionalLightComponentDto(directionalLight, owner),
                         _ => new SceneComponentDto(light, owner)
                     },
-                    UIRMeshComponent irmc => new IRMeshCComponentDto(irmc, owner),
+                    UIRMeshComponent irmc => new IRMeshCComponentDto(irmc, owner), // Custom
                     // UAudioComponent audio => new AudioComponent(audio),
                     // UTextRenderComponent text => new TextRenderComponent(text),
                     // UCameraComponent camera => new CameraComponent(camera),
                     _ => new SceneComponentDto(scene, owner),
                 },
+                UDBDInstancedFoliageComponent foliage => new DBDInstancedFoliageComponentDto(foliage, owner), // Custom
                 { } data => new ComponentDto(data, owner),
                 null => null,
             };
@@ -162,14 +165,9 @@ public abstract class PrimitiveComponentDto : SceneComponentDto
 
     protected PrimitiveComponentDto(UPrimitiveComponent component, ActorDto owner) : base(component, owner)
     {
-        if (component.TryGetValue(out bool visible, "bVisible"))
-        {
-            IsVisible = visible;
-        }
-        else if (component.TryGetValue(out bool hidden, "bHiddenInGame"))
-        {
-            IsVisible = !hidden;
-        }
+        var visible = !component.TryGetValue(out bool isVisible, "bVisible") || isVisible;
+        var hidden = component.TryGetValue(out bool isHidden, "bHiddenInGame", "bIsHidden") && isHidden;
+        IsVisible = visible && !hidden && component.bRenderInMainPass;
 
         if (component.TryGetValue(out bool castShadow, "CastShadow", "bCastStaticShadow", "bCastDynamicShadow"))
         {
@@ -214,6 +212,11 @@ public abstract class MeshComponentDto : PrimitiveComponentDto
     {
         MeshPtr = meshPtr;
         OverrideMaterials = [];
+    }
+
+    protected MeshComponentDto(FPackageIndex meshPtr, FPackageIndex?[] overrideMaterials, ActorDto owner) : this(meshPtr, owner)
+    {
+        OverrideMaterials = overrideMaterials;
     }
 }
 
@@ -261,6 +264,11 @@ public class StaticMeshComponentDto : MeshComponentDto
     {
 
     }
+
+    protected StaticMeshComponentDto(FPackageIndex meshPtr, FPackageIndex?[] overrideMaterials, ActorDto owner) : base(meshPtr, overrideMaterials, owner)
+    {
+
+    }
 }
 
 public class InstancedStaticMeshComponentDto : StaticMeshComponentDto
@@ -278,6 +286,11 @@ public class InstancedStaticMeshComponentDto : StaticMeshComponentDto
     }
 
     public InstancedStaticMeshComponentDto(FPackageIndex meshPtr, FTransform[] transforms, ActorDto owner) : base(meshPtr, owner)
+    {
+        Transforms = transforms;
+    }
+
+    public InstancedStaticMeshComponentDto(FPackageIndex meshPtr, FTransform[] transforms, FPackageIndex?[] overrideMaterials, ActorDto owner) : base(meshPtr, overrideMaterials, owner)
     {
         Transforms = transforms;
     }
